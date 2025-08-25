@@ -1,0 +1,7 @@
+*
+!crates/**
+!.gitignore
+!Cargo.toml
+!Cargo.lock
+!muxox.toml
+!README.md

@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: build-and-test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/muxox
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default (native-tls)
+            features: ""
+            no-default-features: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Rust
+        run: rustup update stable && rustup default stable
+
+      - name: Install clippy and rustfmt
+        run: rustup component add clippy rustfmt
+
+      - name: Cargo fmt (check)
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        shell: bash
+        run: |
+          FLAGS=""
+          if [ "${{ matrix.no-default-features }}" = "true" ]; then FLAGS="$FLAGS --no-default-features"; fi
+          if [ -n "${{ matrix.features }}" ]; then FLAGS="$FLAGS --features ${{ matrix.features }}"; fi
+          echo "Running: cargo clippy --all-targets $FLAGS -- -D warnings"
+          cargo clippy --all-targets $FLAGS -- -D warnings
+
+      - name: Tests
+        shell: bash
+        run: |
+          FLAGS=""
+          if [ "${{ matrix.no-default-features }}" = "true" ]; then FLAGS="$FLAGS --no-default-features"; fi
+          if [ -n "${{ matrix.features }}" ]; then FLAGS="$FLAGS --features ${{ matrix.features }}"; fi
+          echo "Running: cargo test $FLAGS -- --nocapture"
+          cargo test $FLAGS -- --nocapture
+
+      - name: Build Docs
+        shell: bash
+        run: | 
+          cargo doc -p muxox --no-deps 

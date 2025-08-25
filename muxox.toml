@@ -1,0 +1,10 @@
+[[service]]
+name = "frontend"
+cmd = "pnpm client:dev"
+cwd = "./"
+log_capacity = 5000
+
+[[service]]
+name = "backend"
+cmd = "pnpm server:dev"
+cwd = "./"

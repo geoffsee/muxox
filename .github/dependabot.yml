@@ -1,0 +1,64 @@
+# Dependabot configuration for muxox
+# Monitors TLS dependencies for security updates and advisories
+# Generated for Task 6: Dependency Monitoring Setup
+
+version: 2
+updates:
+  # Monitor Rust dependencies in the main crate
+  - package-ecosystem: "cargo"
+    directory: "/crates/muxox"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "UTC"
+    # Focus on security updates with higher priority
+    open-pull-requests-limit: 10
+    reviewers:
+      - "security-team"
+    assignees:
+      - "maintainer"
+    labels:
+      - "dependencies"
+      - "security"
+    # Security updates get higher priority
+    allow:
+      - dependency-type: "all"
+    # Group minor and patch updates to reduce noise
+    groups:
+      tls-dependencies:
+        patterns:
+          - "hyper-tls"
+          - "native-tls" 
+          - "hyper-rustls"
+          - "rustls-pemfile"
+          - "rustls*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Separate major updates for careful review
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+
+  # Monitor security updates more frequently
+  - package-ecosystem: "cargo"
+    directory: "/crates/muxox"
+    schedule:
+      interval: "daily"
+    # Only security updates in daily checks
+    allow:
+      - dependency-type: "direct"
+        update-types: ["security"]
+      - dependency-type: "indirect"
+        update-types: ["security"]
+    open-pull-requests-limit: 5
+    labels:
+      - "security-update"
+      - "high-priority"
+    commit-message:
+      prefix: "security"
+      include: "scope"

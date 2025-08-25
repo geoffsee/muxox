@@ -95,7 +95,8 @@ fn empty_service_array_is_valid() {
     // A config with an empty service array is valid
     let toml_input = "service = []";
 
-    let cfg: TestConfig = toml::from_str(toml_input).expect("config with empty service array should be valid");
+    let cfg: TestConfig =
+        toml::from_str(toml_input).expect("config with empty service array should be valid");
     assert_eq!(cfg.services.len(), 0);
 }
 
@@ -112,15 +113,24 @@ fn missing_service_field_is_invalid() {
 fn parses_real_muxox_toml() {
     // Try to parse the actual muxox.toml file from the repository root
     let result = std::fs::read_to_string("../../muxox.toml");
-    
+
     if let Ok(contents) = result {
         let cfg: TestConfig = toml::from_str(&contents).expect("real muxox.toml should be valid");
-        assert!(!cfg.services.is_empty(), "muxox.toml should have at least one service");
-        
+        assert!(
+            !cfg.services.is_empty(),
+            "muxox.toml should have at least one service"
+        );
+
         // Verify it has the expected services (these assertions depend on the actual file content)
         let service_names: Vec<&str> = cfg.services.iter().map(|s| s.name.as_str()).collect();
-        assert!(service_names.contains(&"frontend"), "Should have a frontend service");
-        assert!(service_names.contains(&"backend"), "Should have a backend service");
+        assert!(
+            service_names.contains(&"frontend"),
+            "Should have a frontend service"
+        );
+        assert!(
+            service_names.contains(&"backend"),
+            "Should have a backend service"
+        );
     } else {
         // Test is still valuable even if we can't find the real file
         println!("Note: Could not find ../../muxox.toml, skipping part of test");

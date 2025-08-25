@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Duration,
@@ -12,17 +11,17 @@ use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
-    Terminal,
 };
 use serde::Deserialize;
-use tokio::{io::AsyncBufReadExt, process::Command as AsyncCommand, sync::mpsc, task, time};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt as _;
+use tokio::{io::AsyncBufReadExt, process::Command as AsyncCommand, sync::mpsc, task, time};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run multiple dev servers with a simple TUI.")]
@@ -46,7 +45,9 @@ struct ServiceCfg {
     #[serde(default = "default_log_capacity")]
     log_capacity: usize,
 }
-fn default_log_capacity() -> usize { 2000 }
+fn default_log_capacity() -> usize {
+    2000
+}
 
 #[cfg(test)]
 mod tests {
@@ -102,12 +103,12 @@ mod tests {
 
         let cfg: Config = toml::from_str(toml_input).expect("Valid Config");
         assert_eq!(cfg.service.len(), 2);
-        
+
         assert_eq!(cfg.service[0].name, "frontend");
         assert_eq!(cfg.service[0].cmd, "pnpm client:dev");
         assert_eq!(cfg.service[0].cwd, Some(PathBuf::from("./")));
         assert_eq!(cfg.service[0].log_capacity, 5000);
-        
+
         assert_eq!(cfg.service[1].name, "backend");
         assert_eq!(cfg.service[1].cmd, "pnpm server:dev");
         assert_eq!(cfg.service[1].cwd, Some(PathBuf::from("./")));
@@ -124,24 +125,24 @@ mod tests {
         };
 
         let mut state = ServiceState::new(cfg.clone());
-        
+
         // Test initial state
         assert_eq!(state.status, Status::Stopped);
         assert!(state.child.is_none());
         assert_eq!(state.log.len(), 0);
         // The ServiceState::new function enforces a minimum capacity of 256
         assert_eq!(state.log.capacity(), 256);
-        
+
         // Test log functionality
         state.push_log("line 1");
         state.push_log("line 2");
         assert_eq!(state.log.len(), 2);
-        
+
         // Test log capacity
         for i in 3..=12 {
             state.push_log(format!("line {}", i));
         }
-        
+
         // Should have removed oldest entries to stay within capacity
         assert_eq!(state.log.len(), 10);
         assert_eq!(state.log.front().unwrap(), "line 3");
@@ -150,7 +151,12 @@ mod tests {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Status { Stopped, Starting, Running, Stopping }
+enum Status {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+}
 
 #[derive(Debug)]
 struct ServiceState {
@@ -170,7 +176,9 @@ impl ServiceState {
         }
     }
     fn push_log(&mut self, line: impl Into<String>) {
-        if self.log.len() == self.cfg.log_capacity { self.log.pop_front(); }
+        if self.log.len() == self.cfg.log_capacity {
+            self.log.pop_front();
+        }
         self.log.push_back(line.into());
     }
 }
@@ -196,7 +204,11 @@ async fn main() -> Result<()> {
     let cfg = load_config(cli.config.as_deref())?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
-    let mut app = App { services: cfg.service.into_iter().map(ServiceState::new).collect(), selected: 0, tx: tx.clone() };
+    let mut app = App {
+        services: cfg.service.into_iter().map(ServiceState::new).collect(),
+        selected: 0,
+        tx: tx.clone(),
+    };
 
     // Signal watcher: on any exit signal, nuke children then exit.
     task::spawn(signal_watcher(tx.clone()));
@@ -204,7 +216,11 @@ async fn main() -> Result<()> {
     // TUI setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen, crossterm::event::EnableMouseCapture)?;
+    crossterm::execute!(
+        stdout,
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -225,10 +241,14 @@ async fn main() -> Result<()> {
                 }
             }
             if handled { /* app mutated, redraw next loop */ }
-            if last_tick.elapsed() >= tick_rate { last_tick = time::Instant::now(); }
+            if last_tick.elapsed() >= tick_rate {
+                last_tick = time::Instant::now();
+            }
 
             // Drain channel
-            while let Ok(msg) = rx.try_recv() { apply_msg(&mut app, msg); }
+            while let Ok(msg) = rx.try_recv() {
+                apply_msg(&mut app, msg);
+            }
         }
     });
 
@@ -243,15 +263,41 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(f.area());
 
-    let items: Vec<ListItem> = app.services.iter().enumerate().map(|(_i, s)| {
-        let status = match s.status { Status::Stopped=>"●", Status::Starting=>"◔", Status::Running=>"◉", Status::Stopping=>"◑" };
-        let color = match s.status { Status::Running=>Color::Green, Status::Starting=>Color::Yellow, Status::Stopping=>Color::Magenta, Status::Stopped=>Color::DarkGray };
-        ListItem::new(Line::from(vec![Span::styled(format!(" {status} "), Style::default().fg(color)), Span::raw(&s.cfg.name)]))
-    }).collect();
+    let items: Vec<ListItem> = app
+        .services
+        .iter()
+        .enumerate()
+        .map(|(_i, s)| {
+            let status = match s.status {
+                Status::Stopped => "●",
+                Status::Starting => "◔",
+                Status::Running => "◉",
+                Status::Stopping => "◑",
+            };
+            let color = match s.status {
+                Status::Running => Color::Green,
+                Status::Starting => Color::Yellow,
+                Status::Stopping => Color::Magenta,
+                Status::Stopped => Color::DarkGray,
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!(" {status} "), Style::default().fg(color)),
+                Span::raw(&s.cfg.name),
+            ]))
+        })
+        .collect();
 
     let list = List::new(items)
-        .block(Block::default().title("Services  (↑/↓ select, Enter start/stop, r restart, c clear, q quit)").borders(Borders::ALL))
-        .highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray));
+        .block(
+            Block::default()
+                .title("Services  (↑/↓ select, Enter start/stop, r restart, c clear, q quit)")
+                .borders(Borders::ALL),
+        )
+        .highlight_style(
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .bg(Color::DarkGray),
+        );
 
     f.render_stateful_widget(list, chunks[0], &mut list_state(app.selected));
 
@@ -263,11 +309,31 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
 
     let selected = &app.services[app.selected];
     let header = Paragraph::new(vec![
-        Line::from(vec![Span::styled("Name: ", Style::default().fg(Color::DarkGray)), Span::raw(&selected.cfg.name)]),
-        Line::from(vec![Span::styled("Cmd:  ", Style::default().fg(Color::DarkGray)), Span::raw(&selected.cfg.cmd)]),
-        Line::from(vec![Span::styled("Cwd:  ", Style::default().fg(Color::DarkGray)), Span::raw(selected.cfg.cwd.as_ref().and_then(|p| p.to_str()).unwrap_or("."))]),
+        Line::from(vec![
+            Span::styled("Name: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&selected.cfg.name),
+        ]),
+        Line::from(vec![
+            Span::styled("Cmd:  ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&selected.cfg.cmd),
+        ]),
+        Line::from(vec![
+            Span::styled("Cwd:  ", Style::default().fg(Color::DarkGray)),
+            Span::raw(
+                selected
+                    .cfg
+                    .cwd
+                    .as_ref()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("."),
+            ),
+        ]),
     ])
-        .block(Block::default().title("Selected Service").borders(Borders::ALL));
+    .block(
+        Block::default()
+            .title("Selected Service")
+            .borders(Borders::ALL),
+    );
 
     let log_text: Vec<Line> = selected.log.iter().map(|l| Line::from(l.clone())).collect();
     let log = Paragraph::new(log_text)
@@ -291,11 +357,28 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
             cleanup_and_exit(app);
             return true;
         }
-        (KeyCode::Down, _) => { app.selected = (app.selected + 1).min(app.services.len()-1); return true; }
-        (KeyCode::Up, _) => { if app.selected>0 { app.selected -= 1; } return true; }
-        (KeyCode::Enter, _) | (KeyCode::Char(' '), _) => { toggle_selected(app); return true; }
-        (KeyCode::Char('r'), _) => { restart_selected(app); return true; }
-        (KeyCode::Char('c'), _) if k.modifiers == KeyModifiers::NONE => { app.services[app.selected].log.clear(); return true; }
+        (KeyCode::Down, _) => {
+            app.selected = (app.selected + 1).min(app.services.len() - 1);
+            return true;
+        }
+        (KeyCode::Up, _) => {
+            if app.selected > 0 {
+                app.selected -= 1;
+            }
+            return true;
+        }
+        (KeyCode::Enter, _) | (KeyCode::Char(' '), _) => {
+            toggle_selected(app);
+            return true;
+        }
+        (KeyCode::Char('r'), _) => {
+            restart_selected(app);
+            return true;
+        }
+        (KeyCode::Char('c'), _) if k.modifiers == KeyModifiers::NONE => {
+            app.services[app.selected].log.clear();
+            return true;
+        }
         _ => {}
     }
     false
@@ -303,13 +386,27 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
 
 fn toggle_selected(app: &mut App) {
     let idx = app.selected;
-    match app.services[idx].status { Status::Stopped => { start_service(idx, app); }, Status::Running | Status::Starting => { stop_service(idx, app); }, Status::Stopping => {} }
+    match app.services[idx].status {
+        Status::Stopped => {
+            start_service(idx, app);
+        }
+        Status::Running | Status::Starting => {
+            stop_service(idx, app);
+        }
+        Status::Stopping => {}
+    }
 }
 
-fn restart_selected(app: &mut App) { let idx = app.selected; stop_service(idx, app); start_service(idx, app); }
+fn restart_selected(app: &mut App) {
+    let idx = app.selected;
+    stop_service(idx, app);
+    start_service(idx, app);
+}
 
 fn start_service(idx: usize, app: &mut App) {
-    if matches!(app.services[idx].status, Status::Running | Status::Starting) { return; }
+    if matches!(app.services[idx].status, Status::Running | Status::Starting) {
+        return;
+    }
     app.services[idx].status = Status::Starting;
     let tx = app.tx.clone();
     let sc = app.services[idx].cfg.clone();
@@ -317,7 +414,9 @@ fn start_service(idx: usize, app: &mut App) {
         // Build command under a shell
         let mut cmd = AsyncCommand::new(shell_program());
         cmd.arg(shell_flag()).arg(shell_exec(&sc.cmd));
-        if let Some(cwd) = sc.cwd.clone() { cmd.current_dir(cwd); }
+        if let Some(cwd) = sc.cwd.clone() {
+            cmd.current_dir(cwd);
+        }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         set_process_group(&mut cmd);
 
@@ -331,7 +430,9 @@ fn start_service(idx: usize, app: &mut App) {
                     let tx2 = tx.clone();
                     task::spawn(async move {
                         let mut reader = tokio::io::BufReader::new(out).lines();
-                        while let Ok(Some(line)) = reader.next_line().await { let _ = tx2.send(AppMsg::Log(idx, line)); }
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            let _ = tx2.send(AppMsg::Log(idx, line));
+                        }
                     });
                 }
                 // stderr
@@ -339,7 +440,9 @@ fn start_service(idx: usize, app: &mut App) {
                     let tx2 = tx.clone();
                     task::spawn(async move {
                         let mut reader = tokio::io::BufReader::new(err).lines();
-                        while let Ok(Some(line)) = reader.next_line().await { let _ = tx2.send(AppMsg::Log(idx, format!("[stderr] {line}"))); }
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            let _ = tx2.send(AppMsg::Log(idx, format!("[stderr] {line}")));
+                        }
                     });
                 }
 
@@ -348,17 +451,24 @@ fn start_service(idx: usize, app: &mut App) {
                 let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
                 let _ = tx.send(AppMsg::Stopped(idx, code));
             }
-            Err(e) => { let _ = tx.send(AppMsg::Log(idx, format!("spawn failed: {e}"))); let _ = tx.send(AppMsg::Stopped(idx, -1)); }
+            Err(e) => {
+                let _ = tx.send(AppMsg::Log(idx, format!("spawn failed: {e}")));
+                let _ = tx.send(AppMsg::Stopped(idx, -1));
+            }
         }
     });
 }
 
 fn stop_service(idx: usize, app: &mut App) {
     let sc = &mut app.services[idx];
-    if !matches!(sc.status, Status::Running | Status::Starting) { return; }
+    if !matches!(sc.status, Status::Running | Status::Starting) {
+        return;
+    }
     sc.status = Status::Stopping;
     sc.push_log("Stopping...");
-    if let Some(child) = sc.child.take() { drop(child); } // actual kill handled by kill_tree below
+    if let Some(child) = sc.child.take() {
+        drop(child);
+    } // actual kill handled by kill_tree below
     kill_tree(idx, app);
 }
 
@@ -373,7 +483,9 @@ fn apply_msg(app: &mut App, msg: AppMsg) {
             s.status = Status::Stopped;
             s.push_log(format!("[exited: code {code}]").as_str());
         }
-        AppMsg::Log(i, line) => { app.services[i].push_log(line); }
+        AppMsg::Log(i, line) => {
+            app.services[i].push_log(line);
+        }
         AppMsg::AbortedAll => { /* UI can optionally display something */ }
     }
 }
@@ -382,7 +494,11 @@ fn cleanup_and_exit(app: &mut App) {
     // Restore terminal first to avoid leaving it raw if we panic later.
     let _ = disable_raw_mode();
     let mut stdout = io::stdout();
-    let _ = crossterm::execute!(stdout, crossterm::event::DisableMouseCapture, crossterm::terminal::LeaveAlternateScreen);
+    let _ = crossterm::execute!(
+        stdout,
+        crossterm::event::DisableMouseCapture,
+        crossterm::terminal::LeaveAlternateScreen
+    );
 
     // Kill all children forcefully
     kill_all(app);
@@ -391,7 +507,9 @@ fn cleanup_and_exit(app: &mut App) {
 }
 
 fn kill_all(app: &mut App) {
-    for i in 0..app.services.len() { kill_tree(i, app); }
+    for i in 0..app.services.len() {
+        kill_tree(i, app);
+    }
 }
 
 fn load_config(provided: Option<&Path>) -> Result<Config> {
@@ -399,7 +517,9 @@ fn load_config(provided: Option<&Path>) -> Result<Config> {
         Some(p) => vec![p.to_path_buf()],
         None => {
             let mut v = vec![PathBuf::from("muxox.toml")];
-            if let Some(proj) = directories::ProjectDirs::from("dev", "local", "devmux") { v.push(proj.config_dir().join("muxox.toml")); }
+            if let Some(proj) = directories::ProjectDirs::from("dev", "local", "devmux") {
+                v.push(proj.config_dir().join("muxox.toml"));
+            }
             v
         }
     };
@@ -414,7 +534,12 @@ fn load_config(provided: Option<&Path>) -> Result<Config> {
 
 #[cfg(unix)]
 fn set_process_group(cmd: &mut AsyncCommand) {
-    unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }) };
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        })
+    };
 }
 #[cfg(windows)]
 fn set_process_group(cmd: &mut AsyncCommand) {
@@ -425,31 +550,45 @@ fn set_process_group(cmd: &mut AsyncCommand) {
 
 #[cfg(unix)]
 fn shell_program() -> &'static str {
-    if std::env::var("SHELL").ok().filter(|s| !s.is_empty()).is_some() {
+    if std::env::var("SHELL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some()
+    {
         // Can't return a dynamically created String as &'static str
         // For simplicity, return a common shell path
         "/bin/bash"
-    } else { 
-        "/bin/sh" 
+    } else {
+        "/bin/sh"
     }
 }
 #[cfg(unix)]
-fn shell_flag() -> &'static str { "-lc" }
+fn shell_flag() -> &'static str {
+    "-lc"
+}
 #[cfg(unix)]
-fn shell_exec(cmd: &str) -> String { cmd.to_string() }
+fn shell_exec(cmd: &str) -> String {
+    cmd.to_string()
+}
 
 #[cfg(windows)]
-fn shell_program() -> &'static str { "cmd.exe" }
+fn shell_program() -> &'static str {
+    "cmd.exe"
+}
 #[cfg(windows)]
-fn shell_flag() -> &'static str { "/C" }
+fn shell_flag() -> &'static str {
+    "/C"
+}
 #[cfg(windows)]
-fn shell_exec(cmd: &str) -> String { cmd.to_string() }
+fn shell_exec(cmd: &str) -> String {
+    cmd.to_string()
+}
 
 #[cfg(unix)]
 fn kill_tree(idx: usize, app: &mut App) {
     // These imports are left as warnings intentionally since they might be needed
     // if we implement more advanced process group management in the future
-    use nix::sys::signal::{killpg, Signal};
+    use nix::sys::signal::{Signal, killpg};
     use nix::unistd::Pid;
     let name = app.services[idx].cfg.name.clone();
     // We don't track exact pgid; setsid() made child leader so killpg(-pid) works if we had it.
@@ -457,9 +596,17 @@ fn kill_tree(idx: usize, app: &mut App) {
     // Simpler: store no pid; rely on pkill -f cmd as fallback.
     let cmdline = &app.services[idx].cfg.cmd;
     // best-effort group kill via pkill
-    let _ = Command::new("pkill").arg("-TERM").arg("-f").arg(cmdline).status();
+    let _ = Command::new("pkill")
+        .arg("-TERM")
+        .arg("-f")
+        .arg(cmdline)
+        .status();
     std::thread::sleep(Duration::from_millis(250));
-    let _ = Command::new("pkill").arg("-KILL").arg("-f").arg(cmdline).status();
+    let _ = Command::new("pkill")
+        .arg("-KILL")
+        .arg("-f")
+        .arg(cmdline)
+        .status();
     app.services[idx].push_log(format!("[killed {name}]"));
 }
 
@@ -467,21 +614,24 @@ fn kill_tree(idx: usize, app: &mut App) {
 fn kill_tree(idx: usize, app: &mut App) {
     let name = app.services[idx].cfg.name.clone();
     // Use taskkill to nuke the subtree
-    let _ = Command::new("taskkill").args(["/F","/T","/FI"]).arg(format!("WINDOWTITLE eq {}", name)).status();
+    let _ = Command::new("taskkill")
+        .args(["/F", "/T", "/FI"])
+        .arg(format!("WINDOWTITLE eq {}", name))
+        .status();
     // fallback: taskkill by image name is too coarse; skip
     app.services[idx].push_log(format!("[killed {name}]"));
 }
 
 #[cfg(unix)]
 async fn signal_watcher(tx: mpsc::UnboundedSender<AppMsg>) {
-    use tokio::signal::unix::{signal, SignalKind};
-    
+    use tokio::signal::unix::{SignalKind, signal};
+
     // Create and pin futures
     let ctrlc = tokio::signal::ctrl_c();
     let sigterm = signal(SignalKind::terminate()).expect("sigterm");
-    
+
     tokio::pin!(ctrlc, sigterm);
-    
+
     // For Unix systems, wait for either Ctrl-C or SIGTERM
     loop {
         tokio::select! {
@@ -496,7 +646,7 @@ async fn signal_watcher(tx: mpsc::UnboundedSender<AppMsg>) {
     // Create and pin futures
     let ctrlc = tokio::signal::ctrl_c();
     tokio::pin!(ctrlc);
-    
+
     // For non-Unix systems, just wait for Ctrl-C
     loop {
         tokio::select! {

@@ -1,3 +1,4 @@
+*
 !crates/
 !crates/**
 !.gitignore
@@ -8,4 +9,4 @@
 !example/
 !example/**
 !workflows
-*
+!muxox.png

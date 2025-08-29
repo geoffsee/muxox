@@ -45,6 +45,11 @@ muxox
 ```bash
 muxox --config path/to/muxox.toml
 ```
+4) Output raw logs instead of TUI
+```bash
+muxox --raw
+```
+5)
 ## Configuration
 
 Each service supports:

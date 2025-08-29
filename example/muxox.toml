@@ -1,0 +1,11 @@
+[[service]]
+name = "example-service-1"
+cmd = "bun ./index.ts"
+cwd = "packages/example-service-1"
+log_capacity = 5000
+
+[[service]]
+name = "example-service-2"
+cmd = "bun ./index.ts"
+cwd = "packages/example-service-2"
+log_capacity = 5000

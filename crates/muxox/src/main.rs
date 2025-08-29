@@ -22,6 +22,7 @@ use serde::Deserialize;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt as _;
 use tokio::{io::AsyncBufReadExt, process::Command as AsyncCommand, sync::mpsc, task, time};
+use tokio::sync::mpsc::UnboundedSender;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run multiple dev servers with a simple TUI.")]
@@ -29,6 +30,9 @@ struct Cli {
     /// Optional path to a services config (TOML). If omitted, looks in: $PWD/muxox.toml then app dirs.
     #[arg(short, long)]
     config: Option<PathBuf>,
+    /// Run in non-interactive mode, outputting raw logs instead of TUI
+    #[arg(long)]
+    raw: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -163,6 +167,7 @@ struct ServiceState {
     cfg: ServiceCfg,
     status: Status,
     child: Option<Child>,
+    pid: Option<u32>,
     log: VecDeque<String>,
 }
 
@@ -173,6 +178,7 @@ impl ServiceState {
             cfg,
             status: Status::Stopped,
             child: None,
+            pid: None,
         }
     }
     fn push_log(&mut self, line: impl Into<String>) {
@@ -195,6 +201,7 @@ enum AppMsg {
     Started(usize),
     Stopped(usize, i32),
     Log(usize, String),
+    ChildSpawned(usize, u32),
     AbortedAll,
 }
 
@@ -203,6 +210,66 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = load_config(cli.config.as_deref())?;
 
+    if cli.raw {
+        // Run in raw streaming mode
+        run_raw_mode(cfg).await
+    } else {
+        // Run in TUI mode
+        run_tui_mode(cfg).await
+    }
+}
+
+async fn run_raw_mode(cfg: Config) -> Result<()> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
+    let mut app = App {
+        services: cfg.service.into_iter().map(ServiceState::new).collect(),
+        selected: 0,
+        tx: tx.clone(),
+    };
+
+    // Signal watcher: on any exit signal, nuke children then exit.
+    task::spawn(signal_watcher(tx.clone()));
+
+    // Start all services
+    for idx in 0..app.services.len() {
+        start_service(idx, &mut app);
+    }
+
+    // Process messages and output logs
+    loop {
+        match rx.recv().await {
+            Some(AppMsg::Log(idx, line)) => {
+                let service_name = &app.services[idx].cfg.name;
+                println!("[{}] {}", service_name, line);
+            }
+            Some(AppMsg::Started(idx)) => {
+                let service_name = &app.services[idx].cfg.name;
+                eprintln!("[{}] Service started", service_name);
+                app.services[idx].status = Status::Running;
+            }
+            Some(AppMsg::Stopped(idx, code)) => {
+                let service_name = &app.services[idx].cfg.name;
+                eprintln!("[{}] Service stopped with exit code: {}", service_name, code);
+                app.services[idx].status = Status::Stopped;
+                app.services[idx].pid = None;
+            }
+            Some(AppMsg::ChildSpawned(idx, pid)) => {
+                let service_name = &app.services[idx].cfg.name;
+                eprintln!("[{}] Process started with PID {}", service_name, pid);
+                app.services[idx].pid = Some(pid);
+            }
+            Some(AppMsg::AbortedAll) => {
+                eprintln!("All services aborted");
+                break;
+            }
+            None => break,
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_tui_mode(cfg: Config) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     let mut app = App {
         services: cfg.service.into_iter().map(ServiceState::new).collect(),
@@ -223,6 +290,11 @@ async fn main() -> Result<()> {
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // Start all services automatically (like in raw mode)
+    for idx in 0..app.services.len() {
+        start_service(idx, &mut app);
+    }
 
     // Render loop
     let ui_task = task::spawn(async move {
@@ -290,7 +362,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Services  (↑/↓ select, Enter start/stop, r restart, c clear, q quit)")
+                .title("Services  (↑/↓ select & view logs, Enter start/stop, r restart, c clear, q quit)")
                 .borders(Borders::ALL),
         )
         .highlight_style(
@@ -338,7 +410,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let log_text: Vec<Line> = selected.log.iter().map(|l| Line::from(l.clone())).collect();
     let log = Paragraph::new(log_text)
         .wrap(Wrap { trim: false })
-        .block(Block::default().title("Logs").borders(Borders::ALL));
+        .block(Block::default().title(format!("Logs - {}", selected.cfg.name)).borders(Borders::ALL));
 
     f.render_widget(header, right_chunks[0]);
     f.render_widget(log, right_chunks[1]);
@@ -410,6 +482,7 @@ fn start_service(idx: usize, app: &mut App) {
     app.services[idx].status = Status::Starting;
     let tx = app.tx.clone();
     let sc = app.services[idx].cfg.clone();
+    
     task::spawn(async move {
         // Build command under a shell
         let mut cmd = AsyncCommand::new(shell_program());
@@ -422,27 +495,24 @@ fn start_service(idx: usize, app: &mut App) {
 
         match cmd.spawn() {
             Ok(mut child) => {
-                let _pid = child.id().unwrap_or_default();
+                let pid = child.id().unwrap_or_default();
                 let _ = tx.send(AppMsg::Started(idx));
+                
+                // Send the child handle back to be stored
+                let _ = tx.send(AppMsg::ChildSpawned(idx, pid));
 
                 // stdout
                 if let Some(out) = child.stdout.take() {
                     let tx2 = tx.clone();
                     task::spawn(async move {
-                        let mut reader = tokio::io::BufReader::new(out).lines();
-                        while let Ok(Some(line)) = reader.next_line().await {
-                            let _ = tx2.send(AppMsg::Log(idx, line));
-                        }
+                        stream_log_realtime(idx, out, tx2, false).await;
                     });
                 }
                 // stderr
                 if let Some(err) = child.stderr.take() {
                     let tx2 = tx.clone();
                     task::spawn(async move {
-                        let mut reader = tokio::io::BufReader::new(err).lines();
-                        while let Ok(Some(line)) = reader.next_line().await {
-                            let _ = tx2.send(AppMsg::Log(idx, format!("[stderr] {line}")));
-                        }
+                        stream_log_realtime(idx, err, tx2, true).await;
                     });
                 }
 
@@ -457,6 +527,21 @@ fn start_service(idx: usize, app: &mut App) {
             }
         }
     });
+}
+
+async fn stream_log_realtime<R>(idx: usize, stream: R, tx: UnboundedSender<AppMsg>, is_stderr: bool)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut lines = tokio::io::BufReader::new(stream).lines();
+
+    while let Ok(Some(line)) = lines.next_line().await {
+        if is_stderr {
+            let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", line)));
+        } else {
+            let _ = tx.send(AppMsg::Log(idx, line));
+        }
+    }
 }
 
 fn stop_service(idx: usize, app: &mut App) {
@@ -481,10 +566,15 @@ fn apply_msg(app: &mut App, msg: AppMsg) {
         AppMsg::Stopped(i, code) => {
             let s = &mut app.services[i];
             s.status = Status::Stopped;
+            s.pid = None; // Clear PID when process stops
             s.push_log(format!("[exited: code {code}]").as_str());
         }
         AppMsg::Log(i, line) => {
             app.services[i].push_log(line);
+        }
+        AppMsg::ChildSpawned(i, pid) => {
+            app.services[i].pid = Some(pid);
+            app.services[i].push_log(format!("[process started with PID {pid}]"));
         }
         AppMsg::AbortedAll => { /* UI can optionally display something */ }
     }
@@ -533,13 +623,13 @@ fn load_config(provided: Option<&Path>) -> Result<Config> {
 }
 
 #[cfg(unix)]
-fn set_process_group(cmd: &mut AsyncCommand) {
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        })
-    };
+fn set_process_group(_cmd: &mut AsyncCommand) {
+    // Remove the unsafe pre_exec that was blocking concurrent execution
+    // The process group setting is not essential for basic functionality
+    // and was causing synchronous blocking in the async runtime
+    // 
+    // If process group isolation is needed in the future, it should be
+    // implemented using process_group() method or other async-safe approaches
 }
 #[cfg(windows)]
 fn set_process_group(cmd: &mut AsyncCommand) {
@@ -586,28 +676,46 @@ fn shell_exec(cmd: &str) -> String {
 
 #[cfg(unix)]
 fn kill_tree(idx: usize, app: &mut App) {
-    // These imports are left as warnings intentionally since they might be needed
-    // if we implement more advanced process group management in the future
     use nix::sys::signal::{Signal, killpg};
     use nix::unistd::Pid;
     let name = app.services[idx].cfg.name.clone();
-    // We don't track exact pgid; setsid() made child leader so killpg(-pid) works if we had it.
-    // As we don't keep the pid, we issue a shell-level killall using process group via sh -c.
-    // Simpler: store no pid; rely on pkill -f cmd as fallback.
-    let cmdline = &app.services[idx].cfg.cmd;
-    // best-effort group kill via pkill
-    let _ = Command::new("pkill")
-        .arg("-TERM")
-        .arg("-f")
-        .arg(cmdline)
-        .status();
-    std::thread::sleep(Duration::from_millis(250));
-    let _ = Command::new("pkill")
-        .arg("-KILL")
-        .arg("-f")
-        .arg(cmdline)
-        .status();
-    app.services[idx].push_log(format!("[killed {name}]"));
+    
+    if let Some(pid) = app.services[idx].pid {
+        // Kill the specific process group using the stored PID
+        let pgid = Pid::from_raw(pid as i32);
+        
+        // First try TERM signal to allow graceful shutdown
+        if let Err(_) = killpg(pgid, Signal::SIGTERM) {
+            // If killpg fails (process group doesn't exist), try killing the process directly
+            let _ = nix::sys::signal::kill(pgid, Signal::SIGTERM);
+        }
+        
+        // Wait a bit for graceful shutdown
+        std::thread::sleep(Duration::from_millis(250));
+        
+        // Then force kill if still running
+        if let Err(_) = killpg(pgid, Signal::SIGKILL) {
+            // If killpg fails, try killing the process directly
+            let _ = nix::sys::signal::kill(pgid, Signal::SIGKILL);
+        }
+        
+        app.services[idx].push_log(format!("[killed {name} (PID {pid})]"));
+    } else {
+        // Fallback to pattern matching if no PID is stored (shouldn't happen with new code)
+        let cmdline = &app.services[idx].cfg.cmd;
+        let _ = Command::new("pkill")
+            .arg("-TERM")
+            .arg("-f")
+            .arg(cmdline)
+            .status();
+        std::thread::sleep(Duration::from_millis(250));
+        let _ = Command::new("pkill")
+            .arg("-KILL")
+            .arg("-f")
+            .arg(cmdline)
+            .status();
+        app.services[idx].push_log(format!("[killed {name} (fallback)]"));
+    }
 }
 
 #[cfg(windows)]

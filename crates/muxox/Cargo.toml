@@ -1,9 +1,9 @@
 [package]
 name = "muxox"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A terminal-based service orchestrator and process multiplexer for development workflows"
-authors = ["William Seemueller <william@seemueller.io>"]
+authors = ["Geoff Seemueller <geoff@seemueller.io>"]
 license = "MIT"
 repository = "https://github.com/seemueller-io/muxox"
 homepage = "https://github.com/seemueller-io/muxox"

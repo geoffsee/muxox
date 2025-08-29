@@ -6,3 +6,5 @@
 !Cargo.lock
 !muxox.toml
 !README.md
+!example/
+!example/**

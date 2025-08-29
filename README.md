@@ -25,6 +25,18 @@ Run all your dev services from one terminal.
 
 ## Quick start
 ### Install
+
+#### Option 1: Pre-built binaries (recommended)
+Download the latest release for your platform from the [releases page](https://github.com/seemueller-io/muxox/releases):
+
+- **Linux (x86_64)**: `muxox-x86_64-unknown-linux-gnu.tar.gz`
+- **macOS (Intel)**: `muxox-x86_64-apple-darwin.tar.gz`
+- **macOS (Apple Silicon)**: `muxox-aarch64-apple-darwin.tar.gz`
+- **Windows**: `muxox-x86_64-pc-windows-msvc.exe.zip`
+
+Extract the binary and place it in your PATH.
+
+#### Option 2: Build from source
 ```bash
 cargo install muxox
 ```

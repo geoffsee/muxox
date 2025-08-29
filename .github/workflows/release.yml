@@ -91,10 +91,83 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
+  build-binaries:
+    name: Build binaries
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: muxox-x86_64-unknown-linux-gnu
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: muxox-x86_64-apple-darwin
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: muxox-aarch64-apple-darwin
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: muxox-x86_64-pc-windows-msvc.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Rust
+        run: rustup update stable && rustup default stable
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build binary
+        run: cargo build --release --target ${{ matrix.target }} -p muxox
+        env:
+          CARGO_TERM_COLOR: always
+
+      - name: Package binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../${{ matrix.name }}.tar.gz muxox
+          cd ../../../
+
+      - name: Package binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ matrix.name }}.zip muxox.exe
+          cd ../../../
+
+      - name: Upload binary artifacts (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.tar.gz
+
+      - name: Upload binary artifacts (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}.zip
+
   release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [test, publish]
+    needs: [test, publish, build-binaries]
     permissions:
       contents: write
     steps:
@@ -134,6 +207,11 @@ jobs:
           cat changelog.md >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
       - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -147,4 +225,8 @@ jobs:
           gh release create "${{ steps.tag.outputs.tag }}" \
             --title "Release ${{ steps.tag.outputs.tag }}" \
             --notes-file changelog.md \
-            $PRERELEASE_FLAG
+            $PRERELEASE_FLAG \
+            artifacts/muxox-x86_64-unknown-linux-gnu/muxox-x86_64-unknown-linux-gnu.tar.gz \
+            artifacts/muxox-x86_64-apple-darwin/muxox-x86_64-apple-darwin.tar.gz \
+            artifacts/muxox-aarch64-apple-darwin/muxox-aarch64-apple-darwin.tar.gz \
+            artifacts/muxox-x86_64-pc-windows-msvc.exe/muxox-x86_64-pc-windows-msvc.exe.zip

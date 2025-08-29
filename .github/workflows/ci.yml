@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    name: build-and-test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Setup Rust
+        run: rustup update stable && rustup default stable
+
+      - name: Install clippy and rustfmt
+        run: rustup component add clippy rustfmt
+
+      - name: Cargo fmt (check)
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        shell: bash
+        run: cargo clippy --all-targets
+
+      - name: Tests
+        shell: bash
+        run: cargo test --all-features
+
+      - name: Build Docs
+        shell: bash
+        run: | 
+          cargo doc -p muxox --no-deps 

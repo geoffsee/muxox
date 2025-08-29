@@ -21,8 +21,8 @@ use ratatui::{
 use serde::Deserialize;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt as _;
-use tokio::{io::AsyncBufReadExt, process::Command as AsyncCommand, sync::mpsc, task, time};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::{io::AsyncBufReadExt, process::Command as AsyncCommand, sync::mpsc, task, time};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run multiple dev servers with a simple TUI.")]
@@ -249,7 +249,10 @@ async fn run_raw_mode(cfg: Config) -> Result<()> {
             }
             Some(AppMsg::Stopped(idx, code)) => {
                 let service_name = &app.services[idx].cfg.name;
-                eprintln!("[{}] Service stopped with exit code: {}", service_name, code);
+                eprintln!(
+                    "[{}] Service stopped with exit code: {}",
+                    service_name, code
+                );
                 app.services[idx].status = Status::Stopped;
                 app.services[idx].pid = None;
             }
@@ -408,9 +411,11 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     );
 
     let log_text: Vec<Line> = selected.log.iter().map(|l| Line::from(l.clone())).collect();
-    let log = Paragraph::new(log_text)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().title(format!("Logs - {}", selected.cfg.name)).borders(Borders::ALL));
+    let log = Paragraph::new(log_text).wrap(Wrap { trim: false }).block(
+        Block::default()
+            .title(format!("Logs - {}", selected.cfg.name))
+            .borders(Borders::ALL),
+    );
 
     f.render_widget(header, right_chunks[0]);
     f.render_widget(log, right_chunks[1]);
@@ -482,7 +487,7 @@ fn start_service(idx: usize, app: &mut App) {
     app.services[idx].status = Status::Starting;
     let tx = app.tx.clone();
     let sc = app.services[idx].cfg.clone();
-    
+
     task::spawn(async move {
         // Build command under a shell
         let mut cmd = AsyncCommand::new(shell_program());
@@ -497,7 +502,7 @@ fn start_service(idx: usize, app: &mut App) {
             Ok(mut child) => {
                 let pid = child.id().unwrap_or_default();
                 let _ = tx.send(AppMsg::Started(idx));
-                
+
                 // Send the child handle back to be stored
                 let _ = tx.send(AppMsg::ChildSpawned(idx, pid));
 
@@ -627,7 +632,7 @@ fn set_process_group(_cmd: &mut AsyncCommand) {
     // Remove the unsafe pre_exec that was blocking concurrent execution
     // The process group setting is not essential for basic functionality
     // and was causing synchronous blocking in the async runtime
-    // 
+    //
     // If process group isolation is needed in the future, it should be
     // implemented using process_group() method or other async-safe approaches
 }
@@ -679,26 +684,26 @@ fn kill_tree(idx: usize, app: &mut App) {
     use nix::sys::signal::{Signal, killpg};
     use nix::unistd::Pid;
     let name = app.services[idx].cfg.name.clone();
-    
+
     if let Some(pid) = app.services[idx].pid {
         // Kill the specific process group using the stored PID
         let pgid = Pid::from_raw(pid as i32);
-        
+
         // First try TERM signal to allow graceful shutdown
         if let Err(_) = killpg(pgid, Signal::SIGTERM) {
             // If killpg fails (process group doesn't exist), try killing the process directly
             let _ = nix::sys::signal::kill(pgid, Signal::SIGTERM);
         }
-        
+
         // Wait a bit for graceful shutdown
         std::thread::sleep(Duration::from_millis(250));
-        
+
         // Then force kill if still running
         if let Err(_) = killpg(pgid, Signal::SIGKILL) {
             // If killpg fails, try killing the process directly
             let _ = nix::sys::signal::kill(pgid, Signal::SIGKILL);
         }
-        
+
         app.services[idx].push_log(format!("[killed {name} (PID {pid})]"));
     } else {
         // Fallback to pattern matching if no PID is stored (shouldn't happen with new code)
@@ -741,6 +746,7 @@ async fn signal_watcher(tx: mpsc::UnboundedSender<AppMsg>) {
     tokio::pin!(ctrlc, sigterm);
 
     // For Unix systems, wait for either Ctrl-C or SIGTERM
+    #[allow(clippy::never_loop)]
     loop {
         tokio::select! {
             _ = &mut ctrlc => { let _=tx.send(AppMsg::AbortedAll); break; }

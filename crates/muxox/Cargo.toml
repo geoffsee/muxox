@@ -1,6 +1,6 @@
 [package]
 name = "muxox"
-version = "0.1.3"
+version = "0.1.5"
 edition = "2024"
 description = "A terminal-based service orchestrator and process multiplexer for development workflows"
 authors = ["Geoff Seemueller <geoff@seemueller.io>"]

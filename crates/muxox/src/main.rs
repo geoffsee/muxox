@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::{
     Terminal,
@@ -193,6 +193,9 @@ impl ServiceState {
 struct App {
     services: Vec<ServiceState>,
     selected: usize,
+    // Number of lines from the end of the log to offset when rendering.
+    // 0 means follow the tail; higher values scroll up into older logs.
+    log_offset_from_end: u16,
     tx: mpsc::UnboundedSender<AppMsg>,
 }
 
@@ -224,6 +227,7 @@ async fn run_raw_mode(cfg: Config) -> Result<()> {
     let mut app = App {
         services: cfg.service.into_iter().map(ServiceState::new).collect(),
         selected: 0,
+        log_offset_from_end: 0,
         tx: tx.clone(),
     };
 
@@ -277,6 +281,7 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
     let mut app = App {
         services: cfg.service.into_iter().map(ServiceState::new).collect(),
         selected: 0,
+        log_offset_from_end: 0,
         tx: tx.clone(),
     };
 
@@ -311,8 +316,14 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
             let timeout = tick_rate.saturating_sub(last_tick.elapsed());
             let mut handled = false;
             if event::poll(timeout).unwrap_or(false) {
-                if let Event::Key(k) = event::read().unwrap_or(Event::FocusGained) {
-                    handled = handle_key(k, &mut app);
+                match event::read().unwrap_or(Event::FocusGained) {
+                    Event::Key(k) => {
+                        handled = handle_key(k, &mut app);
+                    }
+                    Event::Mouse(m) => {
+                        handled = handle_mouse(m, &mut app);
+                    }
+                    _ => {}
                 }
             }
             if handled { /* app mutated, redraw next loop */ }
@@ -365,7 +376,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Services  (↑/↓ select & view logs, Enter start/stop, r restart, c clear, q quit)")
+                .title("Services  (↑/↓ select, Enter start/stop, scroll logs: mouse/trackpad or PgUp/PgDn, r restart, c clear, q quit)")
                 .borders(Borders::ALL),
         )
         .highlight_style(
@@ -410,15 +421,29 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
             .borders(Borders::ALL),
     );
 
-    let log_text: Vec<Line> = selected.log.iter().map(|l| Line::from(l.clone())).collect();
-    let log = Paragraph::new(log_text).wrap(Wrap { trim: false }).block(
-        Block::default()
-            .title(format!("Logs - {}", selected.cfg.name))
-            .borders(Borders::ALL),
-    );
+    let log_area = right_chunks[1];
+    let inner_height = log_area.height.saturating_sub(2); // account for borders
+    let total_lines = selected.log.len() as u16;
+    let max_top = total_lines.saturating_sub(inner_height);
+    let offset_from_end = app.log_offset_from_end.min(max_top);
+    let scroll_top = max_top.saturating_sub(offset_from_end);
+
+    let log_text: Vec<Line> = selected
+        .log
+        .iter()
+        .map(|l| Line::from(l.clone()))
+        .collect();
+    let log = Paragraph::new(log_text)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_top, 0))
+        .block(
+            Block::default()
+                .title(format!("Logs - {}", selected.cfg.name))
+                .borders(Borders::ALL),
+        );
 
     f.render_widget(header, right_chunks[0]);
-    f.render_widget(log, right_chunks[1]);
+    f.render_widget(log, log_area);
 }
 
 fn list_state(selected: usize) -> ratatui::widgets::ListState {
@@ -436,12 +461,16 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
         }
         (KeyCode::Down, _) => {
             app.selected = (app.selected + 1).min(app.services.len() - 1);
+            // Reset log scroll to follow tail when changing selection
+            app.log_offset_from_end = 0;
             return true;
         }
         (KeyCode::Up, _) => {
             if app.selected > 0 {
                 app.selected -= 1;
             }
+            // Reset log scroll to follow tail when changing selection
+            app.log_offset_from_end = 0;
             return true;
         }
         (KeyCode::Enter, _) | (KeyCode::Char(' '), _) => {
@@ -454,6 +483,27 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
         }
         (KeyCode::Char('c'), _) if k.modifiers == KeyModifiers::NONE => {
             app.services[app.selected].log.clear();
+            app.log_offset_from_end = 0;
+            return true;
+        }
+        (KeyCode::PageUp, _) => {
+            // Scroll up older logs
+            app.log_offset_from_end = app.log_offset_from_end.saturating_add(10);
+            return true;
+        }
+        (KeyCode::PageDown, _) => {
+            // Scroll down towards the latest logs
+            app.log_offset_from_end = app.log_offset_from_end.saturating_sub(10);
+            return true;
+        }
+        (KeyCode::Home, _) => {
+            // Jump to top
+            app.log_offset_from_end = u16::MAX;
+            return true;
+        }
+        (KeyCode::End, _) => {
+            // Jump to bottom (follow tail)
+            app.log_offset_from_end = 0;
             return true;
         }
         _ => {}
@@ -766,5 +816,22 @@ async fn signal_watcher(tx: mpsc::UnboundedSender<AppMsg>) {
         tokio::select! {
             _ = &mut ctrlc => { let _=tx.send(AppMsg::AbortedAll); break; }
         }
+    }
+}
+
+
+fn handle_mouse(m: MouseEvent, app: &mut App) -> bool {
+    match m.kind {
+        MouseEventKind::ScrollUp => {
+            // Scroll up a few lines (older logs)
+            app.log_offset_from_end = app.log_offset_from_end.saturating_add(3);
+            true
+        }
+        MouseEventKind::ScrollDown => {
+            // Scroll down towards the latest logs
+            app.log_offset_from_end = app.log_offset_from_end.saturating_sub(3);
+            true
+        }
+        _ => false,
     }
 }

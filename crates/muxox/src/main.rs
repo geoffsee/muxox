@@ -428,11 +428,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let offset_from_end = app.log_offset_from_end.min(max_top);
     let scroll_top = max_top.saturating_sub(offset_from_end);
 
-    let log_text: Vec<Line> = selected
-        .log
-        .iter()
-        .map(|l| Line::from(l.clone()))
-        .collect();
+    let log_text: Vec<Line> = selected.log.iter().map(|l| Line::from(l.clone())).collect();
     let log = Paragraph::new(log_text)
         .wrap(Wrap { trim: false })
         .scroll((scroll_top, 0))
@@ -818,7 +814,6 @@ async fn signal_watcher(tx: mpsc::UnboundedSender<AppMsg>) {
         }
     }
 }
-
 
 fn handle_mouse(m: MouseEvent, app: &mut App) -> bool {
     match m.kind {

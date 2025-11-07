@@ -1,6 +1,11 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2025 Geoff Seemueller
+// This file is part of muxox, released under the MIT License.
+
 use std::{
     collections::VecDeque,
     fs, io,
+    fs::OpenOptions,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Duration,
@@ -21,8 +26,13 @@ use ratatui::{
 use serde::Deserialize;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt as _;
-use tokio::sync::mpsc::UnboundedSender;
-use tokio::{io::AsyncBufReadExt, process::Command as AsyncCommand, sync::mpsc, task, time};
+use std::sync::Arc;
+use tokio::{
+    io::AsyncBufReadExt,
+    process::{ChildStdin, Command as AsyncCommand},
+    sync::{mpsc, Mutex},
+    task, time,
+};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run multiple dev servers with a simple TUI.")]
@@ -48,6 +58,12 @@ struct ServiceCfg {
     /// Keep last N log lines in memory
     #[serde(default = "default_log_capacity")]
     log_capacity: usize,
+    /// Whether the service is interactive (requires stdin)
+    #[serde(default)]
+    interactive: bool,
+    /// Whether to allocate a PTY for this interactive service (Unix only)
+    #[serde(default)]
+    pty: bool,
 }
 fn default_log_capacity() -> usize {
     2000
@@ -126,6 +142,7 @@ mod tests {
             cmd: "echo hello".to_string(),
             cwd: None,
             log_capacity: 10,
+            interactive: false,
         };
 
         let mut state = ServiceState::new(cfg.clone());
@@ -169,6 +186,8 @@ struct ServiceState {
     child: Option<Child>,
     pid: Option<u32>,
     log: VecDeque<String>,
+    stdin_tx: Option<mpsc::Sender<String>>,
+    stdin_writer: Option<Arc<Mutex<ChildStdin>>>,
 }
 
 impl ServiceState {
@@ -179,6 +198,8 @@ impl ServiceState {
             status: Status::Stopped,
             child: None,
             pid: None,
+            stdin_tx: None,
+            stdin_writer: None,
         }
     }
     fn push_log(&mut self, line: impl Into<String>) {
@@ -197,6 +218,9 @@ struct App {
     // 0 means follow the tail; higher values scroll up into older logs.
     log_offset_from_end: u16,
     tx: mpsc::UnboundedSender<AppMsg>,
+    // Input mode for interactive services
+    input_mode: bool,
+    input_buffer: String,
 }
 
 #[derive(Debug)]
@@ -205,6 +229,8 @@ enum AppMsg {
     Stopped(usize, i32),
     Log(usize, String),
     ChildSpawned(usize, u32),
+    StdinReady(usize, mpsc::Sender<String>),
+    StdinWriterReady(usize, Arc<Mutex<ChildStdin>>),
     AbortedAll,
 }
 
@@ -229,6 +255,8 @@ async fn run_raw_mode(cfg: Config) -> Result<()> {
         selected: 0,
         log_offset_from_end: 0,
         tx: tx.clone(),
+        input_mode: false,
+        input_buffer: String::new(),
     };
 
     // Signal watcher: on any exit signal, nuke children then exit.
@@ -265,6 +293,12 @@ async fn run_raw_mode(cfg: Config) -> Result<()> {
                 eprintln!("[{}] Process started with PID {}", service_name, pid);
                 app.services[idx].pid = Some(pid);
             }
+            Some(AppMsg::StdinReady(idx, stdin_tx)) => {
+                app.services[idx].stdin_tx = Some(stdin_tx);
+            }
+            Some(AppMsg::StdinWriterReady(idx, writer)) => {
+                app.services[idx].stdin_writer = Some(writer);
+            }
             Some(AppMsg::AbortedAll) => {
                 eprintln!("All services aborted");
                 break;
@@ -283,6 +317,8 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
         selected: 0,
         log_offset_from_end: 0,
         tx: tx.clone(),
+        input_mode: false,
+        input_buffer: String::new(),
     };
 
     // Signal watcher: on any exit signal, nuke children then exit.
@@ -346,10 +382,23 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
 }
 
 fn draw_ui(f: &mut ratatui::Frame, app: &App) {
+    // Split screen to add input area at bottom if in input mode
+    let main_chunks = if app.input_mode {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .split(f.area())
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1)])
+            .split(f.area())
+    };
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(f.area());
+        .split(main_chunks[0]);
 
     let items: Vec<ListItem> = app
         .services
@@ -378,7 +427,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Services  (↑/↓ select, Enter start/stop, scroll logs: mouse/trackpad or PgUp/PgDn, r restart, c clear, q quit)")
+                .title("Services  (↑/↓ select, i input mode, Space start/stop, r restart, c clear, q quit)")
                 .borders(Borders::ALL),
         )
         .highlight_style(
@@ -442,6 +491,19 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
 
     f.render_widget(header, right_chunks[0]);
     f.render_widget(log, log_area);
+
+    // Render input bar if in input mode
+    if app.input_mode {
+        let input_widget = Paragraph::new(format!("> {}", app.input_buffer))
+            .style(Style::default().fg(Color::Yellow))
+            .block(
+                Block::default()
+                    .title("Input Mode (ESC to exit, Enter to send)")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow)),
+            );
+        f.render_widget(input_widget, main_chunks[1]);
+    }
 }
 
 fn list_state(selected: usize) -> ratatui::widgets::ListState {
@@ -451,10 +513,139 @@ fn list_state(selected: usize) -> ratatui::widgets::ListState {
 }
 
 fn handle_key(k: KeyEvent, app: &mut App) -> bool {
+    // Input mode handling
+    if app.input_mode {
+        match k.code {
+            KeyCode::Esc => {
+                // Exit input mode
+                app.input_mode = false;
+                app.input_buffer.clear();
+                return true;
+            }
+            KeyCode::Enter => {
+                // Send input to selected service (only if buffer is non-empty)
+                let idx = app.selected;
+                if !app.input_buffer.is_empty() {
+                    let input = app.input_buffer.clone();
+                    app.services[idx].push_log(format!("[DEBUG] Sending input: {:?}", input));
+                    if let Some(stdin_writer) = app.services[idx].stdin_writer.clone() {
+                        // Sanity logs mirroring the previous channel-based path
+                        app.services[idx].push_log(format!("[DEBUG] Input queued successfully: {:?}", input));
+                        app.services[idx].push_log("[DEBUG] Post-queue sanity: after queuing for direct writer".to_string());
+                        app.services[idx].push_log("[DEBUG] About to spawn direct writer task".to_string());
+                        let input_for_task = input.clone();
+                        let tx = app.tx.clone();
+                        let idx_for_task = idx;
+                        // Attempt write via async task
+                        task::spawn(async move {
+                            debug_file_log("spawn: task entered");
+                            let _ = tx.send(AppMsg::Log(idx_for_task, format!("[DEBUG] Direct write task started for: {:?}", input_for_task)));
+                            use std::os::unix::io::{AsRawFd, BorrowedFd};
+                            let mut guard = stdin_writer.lock().await;
+                            debug_file_log("spawn: acquired lock");
+                            let _ = tx.send(AppMsg::Log(idx_for_task, "[DEBUG] Direct write acquired lock".to_string()));
+                            let fd = guard.as_raw_fd();
+                            // Perform a direct, blocking write to the child's stdin fd.
+                            let mut total = 0;
+                            // Send CR to mimic Enter on a TTY; many readline-based CLIs expect "\r".
+                            // Some also accept LF; if needed we can append "\n" later.
+                            let data = format!("{}\r", input_for_task);
+                            let bytes = data.as_bytes();
+                            loop {
+                                let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+                                match nix::unistd::write(borrowed, &bytes[total..]) {
+                                    Ok(n) => {
+                                        total += n;
+                                        if total >= bytes.len() { break; }
+                                    }
+                                    Err(e) => {
+                                        debug_file_log(&format!("spawn: nix::write failed: {}", e));
+                                        let _ = tx.send(AppMsg::Log(idx_for_task, format!("[DEBUG] Direct write (fd) failed: {}", e)));
+                                        return;
+                                    }
+                                }
+                            }
+                            debug_file_log("spawn: write success");
+                            let _ = tx.send(AppMsg::Log(idx_for_task, format!("[DEBUG] Direct write success ({} bytes)", total)));
+                        });
+                        // Also attempt write on a plain OS thread in case the async task is starved
+                        {
+                            let tx = app.tx.clone();
+                            let stdin_writer = app.services[idx].stdin_writer.clone().unwrap();
+                            let input_for_thread = input.clone();
+                            let idx_for_thread = idx;
+                            std::thread::spawn(move || {
+                                debug_file_log("thread: started");
+                                use std::os::unix::io::{AsRawFd, BorrowedFd};
+                                // Try to acquire lock a few times without async runtime
+                                for _ in 0..50 {
+                                    if let Ok(guard) = stdin_writer.try_lock() {
+                                        let fd = guard.as_raw_fd();
+                                        let data = format!("{}\r", input_for_thread);
+                                        let mut total = 0usize;
+                                        let bytes = data.as_bytes();
+                                        loop {
+                                            let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+                                            match nix::unistd::write(borrowed, &bytes[total..]) {
+                                                Ok(n) => {
+                                                    total += n;
+                                                    if total >= bytes.len() { break; }
+                                                }
+                                                Err(e) => {
+                                                    debug_file_log(&format!("thread: nix::write failed: {}", e));
+                                                    let _ = tx.send(AppMsg::Log(idx_for_thread, format!("[DEBUG] Direct write (thread) failed: {}", e)));
+                                                    return;
+                                                }
+                                            }
+                                        }
+                                        debug_file_log("thread: write success");
+                                        let _ = tx.send(AppMsg::Log(idx_for_thread, format!("[DEBUG] Direct write (thread) success ({} bytes)", total)));
+                                        return;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(5));
+                                }
+                                let _ = tx.send(AppMsg::Log(idx_for_thread, "[DEBUG] Direct write (thread) could not acquire lock".to_string()));
+                            });
+                        }
+                        app.services[idx].push_log("[DEBUG] Spawned direct writer task".to_string());
+                    } else {
+                        app.services[idx].push_log("[DEBUG] stdin_writer not available yet!".to_string());
+                    }
+                    app.input_buffer.clear();
+                } else {
+                    app.services[idx].push_log("[DEBUG] Skipping empty input".to_string());
+                }
+                return true;
+            }
+            KeyCode::Backspace => {
+                // Remove last character
+                app.input_buffer.pop();
+                return true;
+            }
+            KeyCode::Char(c) => {
+                // Add character to buffer
+                app.input_buffer.push(c);
+                return true;
+            }
+            _ => {}
+        }
+        return false;
+    }
+
+    // Normal mode handling
     match (k.code, k.modifiers) {
         (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => {
             // Quit: perform cleanup
             cleanup_and_exit(app);
+            return true;
+        }
+        (KeyCode::Char('i'), _) => {
+            // Enter input mode for interactive services
+            let idx = app.selected;
+            if app.services[idx].cfg.interactive && app.services[idx].stdin_writer.is_some() {
+                app.input_mode = true;
+                app.input_buffer.clear();
+            }
             return true;
         }
         (KeyCode::Down, _) => {
@@ -471,7 +662,7 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
             app.log_offset_from_end = 0;
             return true;
         }
-        (KeyCode::Enter, _) | (KeyCode::Char(' '), _) => {
+        (KeyCode::Char(' '), _) => {
             toggle_selected(app);
             return true;
         }
@@ -511,11 +702,15 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
 
 fn toggle_selected(app: &mut App) {
     let idx = app.selected;
-    match app.services[idx].status {
+    let status = app.services[idx].status;
+    app.services[idx].push_log(format!("[DEBUG] toggle_selected called, status: {:?}", status));
+    match status {
         Status::Stopped => {
+            app.services[idx].push_log("[DEBUG] Starting service from toggle".to_string());
             start_service(idx, app);
         }
         Status::Running | Status::Starting => {
+            app.services[idx].push_log("[DEBUG] Stopping service from toggle".to_string());
             stop_service(idx, app);
         }
         Status::Stopping => {}
@@ -537,13 +732,36 @@ fn start_service(idx: usize, app: &mut App) {
     let sc = app.services[idx].cfg.clone();
 
     task::spawn(async move {
-        // Build command under a shell
-        let mut cmd = AsyncCommand::new(shell_program());
-        cmd.arg(shell_flag()).arg(shell_exec(&sc.cmd));
+        // Build command; optionally wrap interactive with a PTY when requested
+        #[cfg(unix)]
+        let mut cmd = {
+            if sc.interactive && sc.pty {
+                let mut c = AsyncCommand::new(interactive_program());
+                for a in interactive_args(&sc.cmd) { c.arg(a); }
+                let _ = tx.send(AppMsg::Log(idx, "[DEBUG] Launching interactive via PTY wrapper (script)".to_string()));
+                c
+            } else {
+                let mut c = AsyncCommand::new(shell_program());
+                c.arg(shell_flag()).arg(shell_exec(&sc.cmd));
+                c
+            }
+        };
+        #[cfg(not(unix))]
+        let mut cmd = {
+            let mut c = AsyncCommand::new(shell_program());
+            c.arg(shell_flag()).arg(shell_exec(&sc.cmd));
+            c
+        };
         if let Some(cwd) = sc.cwd.clone() {
             cmd.current_dir(cwd);
         }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        
+        // Interactive services need stdin piped so we can send input
+        if sc.interactive {
+            cmd.stdin(Stdio::piped());
+        }
+        
         set_process_group(&mut cmd);
 
         match cmd.spawn() {
@@ -553,6 +771,18 @@ fn start_service(idx: usize, app: &mut App) {
 
                 // Send the child handle back to be stored
                 let _ = tx.send(AppMsg::ChildSpawned(idx, pid));
+
+                // For interactive services, setup stdin forwarding
+                if sc.interactive {
+                    let _ = tx.send(AppMsg::Log(idx, "[DEBUG] Service is interactive, setting up stdin forwarding".to_string()));
+                    if let Some(stdin) = child.stdin.take() {
+                        let _ = tx.send(AppMsg::Log(idx, "[DEBUG] child.stdin is available".to_string()));
+                        // Publish a direct-writer handle (Arc<Mutex<ChildStdin>>) back to the app
+                        let writer = Arc::new(Mutex::new(stdin));
+                        let _ = tx.send(AppMsg::StdinWriterReady(idx, writer));
+                        let _ = tx.send(AppMsg::Log(idx, "[DEBUG] StdinWriterReady message sent".to_string()));
+                    }
+                }
 
                 // stdout
                 if let Some(out) = child.stdout.take() {
@@ -582,19 +812,115 @@ fn start_service(idx: usize, app: &mut App) {
     });
 }
 
-async fn stream_log_realtime<R>(idx: usize, stream: R, tx: UnboundedSender<AppMsg>, is_stderr: bool)
+async fn stream_log_realtime<R>(idx: usize, stream: R, tx: mpsc::UnboundedSender<AppMsg>, is_stderr: bool)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut lines = tokio::io::BufReader::new(stream).lines();
+    let mut coalesce = String::new();
 
     while let Ok(Some(line)) = lines.next_line().await {
-        if is_stderr {
-            let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", line)));
+        // Prefer the last segment after carriage returns to emulate in-place updates
+        let mut last_nonempty: Option<&str> = None;
+        for piece in line.split('\r') {
+            if !piece.is_empty() { last_nonempty = Some(piece); }
+        }
+        let piece = last_nonempty.unwrap_or("");
+        if piece.is_empty() { continue; }
+        let clean = sanitize_log_line(piece);
+        // Drop leftover bare SGR fragments like "39m" or "2K"
+        if is_bare_ansi_fragment(&clean) { continue; }
+        if should_coalesce(&clean) {
+            coalesce.push_str(&clean);
+            continue;
+        }
+        if !coalesce.is_empty() {
+            let merged = format!("{}{}", coalesce, clean);
+            coalesce.clear();
+            if is_stderr {
+                let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", merged)));
+            } else {
+                let _ = tx.send(AppMsg::Log(idx, merged));
+            }
         } else {
-            let _ = tx.send(AppMsg::Log(idx, line));
+            if is_stderr {
+                let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", clean)));
+            } else {
+                let _ = tx.send(AppMsg::Log(idx, clean));
+            }
         }
     }
+    if !coalesce.is_empty() {
+        let _ = tx.send(AppMsg::Log(idx, coalesce));
+    }
+}
+
+fn sanitize_log_line(s: &str) -> String {
+    // Remove ANSI escape sequences and control chars that can garble the TUI.
+    // Minimal CSI parser: ESC '[' ... final byte in 0x40..=0x7E
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => { // ESC
+                if let Some('[') = chars.peek().copied() {
+                    // Consume '['
+                    let _ = chars.next();
+                    // Consume until a final byte (ASCII 0x40..=0x7E)
+                    while let Some(c) = chars.next() {
+                        if ('@'..='~').contains(&c) { break; }
+                    }
+                } else if let Some(']') = chars.peek().copied() {
+                    // OSC: ESC ] ... BEL (\x07) or ST (ESC \)
+                    let _ = chars.next(); // consume ']'
+                    // Read until BEL or ST
+                    let mut prev_esc = false;
+                    while let Some(c) = chars.next() {
+                        if c == '\u{0007}' { break; }
+                        if prev_esc && c == '\\' { break; }
+                        prev_esc = c == '\u{1b}';
+                    }
+                } else {
+                    // Skip one more char if present; treat other ESC sequences as 2-char
+                    let _ = chars.next();
+                }
+            }
+            '\u{0007}' => { /* bell, drop */ }
+            '\r' => { /* handled by split above; drop here */ }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn is_bare_ansi_fragment(s: &str) -> bool {
+    // Fragments like "39m", "0m", "2K" left behind if ESC was on previous chunk
+    if s.is_empty() { return false; }
+    let mut chars = s.chars();
+    let mut saw_digit_or_q = false;
+    let mut valid = true;
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() || c == ';' || c == '?' { saw_digit_or_q = true; continue; }
+        // Recognize common final bytes
+        if saw_digit_or_q && matches!(c, 'm' | 'K' | 'J' | 'H' | 'G' | 'A' | 'B' | 'C' | 'D' | 'f' | 'h' | 'l' | 's' | 'u' | 't' | '~') {
+            // Ensure no trailing content
+            valid = chars.next().is_none();
+            break;
+        }
+        valid = false; break;
+    }
+    valid
+}
+
+fn should_coalesce(s: &str) -> bool {
+    // Heuristic: many PTY tools print one character per line during rendering.
+    // Coalesce short printable fragments to avoid vertical columns.
+    let len = s.chars().count();
+    if len == 0 { return false; }
+    if len <= 2 && s.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+        return true;
+    }
+    false
 }
 
 fn stop_service(idx: usize, app: &mut App) {
@@ -620,6 +946,8 @@ fn apply_msg(app: &mut App, msg: AppMsg) {
             let s = &mut app.services[i];
             s.status = Status::Stopped;
             s.pid = None; // Clear PID when process stops
+            s.stdin_tx = None; // Clear stdin channel when process stops
+            s.stdin_writer = None; // Clear direct writer when process stops
             s.push_log(format!("[exited: code {code}]").as_str());
         }
         AppMsg::Log(i, line) => {
@@ -628,6 +956,15 @@ fn apply_msg(app: &mut App, msg: AppMsg) {
         AppMsg::ChildSpawned(i, pid) => {
             app.services[i].pid = Some(pid);
             app.services[i].push_log(format!("[process started with PID {pid}]"));
+        }
+        AppMsg::StdinReady(i, stdin_tx) => {
+            app.services[i].push_log("[DEBUG] StdinReady received in apply_msg, storing stdin_tx".to_string());
+            app.services[i].stdin_tx = Some(stdin_tx);
+            app.services[i].push_log("[DEBUG] stdin_tx stored successfully".to_string());
+        }
+        AppMsg::StdinWriterReady(i, writer) => {
+            app.services[i].stdin_writer = Some(writer);
+            app.services[i].push_log("[DEBUG] stdin_writer stored successfully".to_string());
         }
         AppMsg::AbortedAll => { /* UI can optionally display something */ }
     }
@@ -689,21 +1026,13 @@ fn set_process_group(cmd: &mut AsyncCommand) {
 
 #[cfg(unix)]
 fn shell_program() -> &'static str {
-    if std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .is_some()
-    {
-        // Can't return a dynamically created String as &'static str
-        // For simplicity, return a common shell path
-        "/bin/bash"
-    } else {
-        "/bin/sh"
-    }
+    // Use a plain POSIX shell to avoid login-shell quirks
+    "/bin/sh"
 }
 #[cfg(unix)]
 fn shell_flag() -> &'static str {
-    "-lc"
+    // Use non-login shell to avoid stdin quirks
+    "-c"
 }
 #[cfg(unix)]
 fn shell_exec(cmd: &str) -> String {
@@ -721,6 +1050,24 @@ fn shell_flag() -> &'static str {
 #[cfg(windows)]
 fn shell_exec(cmd: &str) -> String {
     cmd.to_string()
+}
+
+// For Unix interactive services, run the command under a PTY using `script`.
+// This makes tools that require a TTY (e.g., readline-based CLIs) behave properly.
+#[cfg(unix)]
+fn interactive_program() -> &'static str {
+    // Rely on PATH lookup for `script` (macOS: /usr/bin/script)
+    "script"
+}
+#[cfg(unix)]
+fn interactive_args(cmd: &str) -> Vec<String> {
+    vec![
+        "-q".to_string(),
+        "/dev/null".to_string(),
+        shell_program().to_string(),
+        shell_flag().to_string(),
+        shell_exec(cmd),
+    ]
 }
 
 #[cfg(unix)]
@@ -809,6 +1156,15 @@ async fn signal_watcher(tx: mpsc::UnboundedSender<AppMsg>) {
     loop {
         tokio::select! {
             _ = &mut ctrlc => { let _=tx.send(AppMsg::AbortedAll); break; }
+        }
+    }
+}
+
+fn debug_file_log(msg: &str) {
+    if let Ok(path) = std::env::var("MUXOX_DEBUG_FILE") {
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write as _;
+            let _ = writeln!(f, "[{:?}] {}", std::thread::current().id(), msg);
         }
     }
 }

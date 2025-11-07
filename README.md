@@ -3,7 +3,7 @@
 Run all your dev services from one terminal.
 
 <p align="center">
-  <img src="https://github.com/seemueller-io/muxox/blob/master/muxox.png?raw=true" width="66%" />
+  <img src="https://github.com/geoffsee/muxox/blob/master/muxox.png?raw=true" width="66%" />
 </p>
 
 `muxox` is a cli-based service orchestrator that makes it easy to start, stop, and monitor multiple processes during development—without juggling a bunch of windows or tabs.
@@ -27,7 +27,7 @@ Run all your dev services from one terminal.
 ### Install
 
 #### Option 1: Pre-built binaries (recommended)
-Download the latest release for your platform from the [releases page](https://github.com/seemueller-io/muxox/releases):
+Download the latest release for your platform from the [releases page](https://github.com/geoffsee/muxox/releases):
 
 - **Linux (x86_64)**: `muxox-x86_64-unknown-linux-gnu.tar.gz`
 - **macOS (Intel)**: `muxox-x86_64-apple-darwin.tar.gz`

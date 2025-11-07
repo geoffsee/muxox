@@ -293,8 +293,7 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
     let mut stdout = io::stdout();
     crossterm::execute!(
         stdout,
-        crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::terminal::EnterAlternateScreen
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -321,7 +320,10 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
                         handled = handle_key(k, &mut app);
                     }
                     Event::Mouse(m) => {
-                        handled = handle_mouse(m, &mut app);
+                        // Only handle scroll events, ignore mouse movements
+                        if matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+                            handled = handle_mouse(m, &mut app);
+                        }
                     }
                     _ => {}
                 }
@@ -637,7 +639,6 @@ fn cleanup_and_exit(app: &mut App) {
     let mut stdout = io::stdout();
     let _ = crossterm::execute!(
         stdout,
-        crossterm::event::DisableMouseCapture,
         crossterm::terminal::LeaveAlternateScreen
     );
 

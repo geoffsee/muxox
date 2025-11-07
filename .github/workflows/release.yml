@@ -9,9 +9,58 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  update-versions:
+    name: Update versions from tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Extract version from tag
+        id: get_version
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $TAG_VERSION"
+
+      - name: Update Cargo.toml version
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" crates/muxox/Cargo.toml
+          rm -f crates/muxox/Cargo.toml.bak
+          echo "Updated Cargo.toml to version $VERSION"
+          grep "^version" crates/muxox/Cargo.toml
+
+      - name: Update package.json version
+        run: |
+          cd npm
+          VERSION="${{ steps.get_version.outputs.version }}"
+          npm version $VERSION --no-git-tag-version --allow-same-version
+          echo "Updated package.json to version $VERSION"
+          grep "\"version\"" package.json
+
+      - name: Commit version updates
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add crates/muxox/Cargo.toml npm/package.json
+          git diff --staged --quiet || git commit -m "chore: update versions to ${{ steps.get_version.outputs.version }} from tag"
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+
   test:
     name: Test before release
     runs-on: ubuntu-latest
+    needs: update-versions
     defaults:
       run:
         working-directory: crates/muxox
@@ -20,6 +69,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: actions/cache@v4
         with:
@@ -60,6 +111,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: actions/cache@v4
         with:
@@ -73,15 +126,6 @@ jobs:
 
       - name: Setup Rust
         run: rustup update stable && rustup default stable
-
-      - name: Verify tag matches version
-        run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          CARGO_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
-            exit 1
-          fi
 
       # See Trusted publishing: https://crates.io/docs/trusted-publishing
       - uses: rust-lang/crates-io-auth-action@v1
@@ -114,6 +158,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: actions/cache@v4
         with:

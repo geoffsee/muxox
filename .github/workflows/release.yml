@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'v*.rc'
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,8 +25,11 @@ jobs:
         id: get_version
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$TAG_VERSION" >> $GITHUB_OUTPUT
-          echo "Extracted version: $TAG_VERSION"
+          # Strip .rc suffix
+          VERSION=${TAG_VERSION%.rc}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "rc_tag=$TAG_VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION (from RC tag: $TAG_VERSION)"
 
       - name: Update Cargo.toml version
         run: |
@@ -57,6 +60,11 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           branch: master
 
+      - name: Create release tag
+        run: |
+          git tag -a "v${{ steps.get_version.outputs.version }}" -m "Release version ${{ steps.get_version.outputs.version }}"
+          git push origin "v${{ steps.get_version.outputs.version }}"
+
   test:
     name: Test before release
     runs-on: ubuntu-latest
@@ -70,7 +78,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: master
 
       - uses: actions/cache@v4
         with:
@@ -112,7 +120,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: master
 
       - uses: actions/cache@v4
         with:
@@ -159,7 +167,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref }}
+          ref: master
 
       - uses: actions/cache@v4
         with:

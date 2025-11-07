@@ -7,7 +7,7 @@ interactive = true
 
 [[service]]
 name = "ai-chat"
-cmd = "bunx @builder.io/ai-shell chat"
+cmd = "NO_COLOR=1 FORCE_COLOR=0 CI=1 TERM=dumb bunx @builder.io/ai-shell chat"
 cwd = "."
 log_capacity = 250
 interactive = true

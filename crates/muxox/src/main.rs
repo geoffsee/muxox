@@ -817,111 +817,25 @@ where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut lines = tokio::io::BufReader::new(stream).lines();
-    let mut coalesce = String::new();
 
     while let Ok(Some(line)) = lines.next_line().await {
-        // Prefer the last segment after carriage returns to emulate in-place updates
+        // Handle carriage returns for progress indicators (keep this for compatibility)
         let mut last_nonempty: Option<&str> = None;
         for piece in line.split('\r') {
             if !piece.is_empty() { last_nonempty = Some(piece); }
         }
-        let piece = last_nonempty.unwrap_or("");
+        let piece = last_nonempty.unwrap_or(&line);
         if piece.is_empty() { continue; }
-        let clean = sanitize_log_line(piece);
-        // Drop leftover bare SGR fragments like "39m" or "2K"
-        if is_bare_ansi_fragment(&clean) { continue; }
-        if should_coalesce(&clean) {
-            coalesce.push_str(&clean);
-            continue;
-        }
-        if !coalesce.is_empty() {
-            let merged = format!("{}{}", coalesce, clean);
-            coalesce.clear();
-            if is_stderr {
-                let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", merged)));
-            } else {
-                let _ = tx.send(AppMsg::Log(idx, merged));
-            }
+
+        // Simple pass-through - this worked fine for AI chat before
+        if is_stderr {
+            let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", piece)));
         } else {
-            if is_stderr {
-                let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", clean)));
-            } else {
-                let _ = tx.send(AppMsg::Log(idx, clean));
-            }
+            let _ = tx.send(AppMsg::Log(idx, piece.to_string()));
         }
-    }
-    if !coalesce.is_empty() {
-        let _ = tx.send(AppMsg::Log(idx, coalesce));
     }
 }
 
-fn sanitize_log_line(s: &str) -> String {
-    // Remove ANSI escape sequences and control chars that can garble the TUI.
-    // Minimal CSI parser: ESC '[' ... final byte in 0x40..=0x7E
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '\u{1b}' => { // ESC
-                if let Some('[') = chars.peek().copied() {
-                    // Consume '['
-                    let _ = chars.next();
-                    // Consume until a final byte (ASCII 0x40..=0x7E)
-                    while let Some(c) = chars.next() {
-                        if ('@'..='~').contains(&c) { break; }
-                    }
-                } else if let Some(']') = chars.peek().copied() {
-                    // OSC: ESC ] ... BEL (\x07) or ST (ESC \)
-                    let _ = chars.next(); // consume ']'
-                    // Read until BEL or ST
-                    let mut prev_esc = false;
-                    while let Some(c) = chars.next() {
-                        if c == '\u{0007}' { break; }
-                        if prev_esc && c == '\\' { break; }
-                        prev_esc = c == '\u{1b}';
-                    }
-                } else {
-                    // Skip one more char if present; treat other ESC sequences as 2-char
-                    let _ = chars.next();
-                }
-            }
-            '\u{0007}' => { /* bell, drop */ }
-            '\r' => { /* handled by split above; drop here */ }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-fn is_bare_ansi_fragment(s: &str) -> bool {
-    // Fragments like "39m", "0m", "2K" left behind if ESC was on previous chunk
-    if s.is_empty() { return false; }
-    let mut chars = s.chars();
-    let mut saw_digit_or_q = false;
-    let mut valid = true;
-    while let Some(c) = chars.next() {
-        if c.is_ascii_digit() || c == ';' || c == '?' { saw_digit_or_q = true; continue; }
-        // Recognize common final bytes
-        if saw_digit_or_q && matches!(c, 'm' | 'K' | 'J' | 'H' | 'G' | 'A' | 'B' | 'C' | 'D' | 'f' | 'h' | 'l' | 's' | 'u' | 't' | '~') {
-            // Ensure no trailing content
-            valid = chars.next().is_none();
-            break;
-        }
-        valid = false; break;
-    }
-    valid
-}
-
-fn should_coalesce(s: &str) -> bool {
-    // Heuristic: many PTY tools print one character per line during rendering.
-    // Coalesce short printable fragments to avoid vertical columns.
-    let len = s.chars().count();
-    if len == 0 { return false; }
-    if len <= 2 && s.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
-        return true;
-    }
-    false
-}
 
 fn stop_service(idx: usize, app: &mut App) {
     let sc = &mut app.services[idx];

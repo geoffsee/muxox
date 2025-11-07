@@ -4,6 +4,9 @@
   "workspaces": ["packages/*"],
   "type": "module",
   "private": true,
+  "scripts": {
+    "start": "npx muxox"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },

@@ -1,4 +1,10 @@
 [[service]]
+name = "ai-chat"
+cmd = "bunx @builder.io/ai-shell chat"
+cwd = "."
+log_capacity = 250
+
+[[service]]
 name = "example-service-1"
 cmd = "bun ./index.ts"
 cwd = "packages/example-service-1"

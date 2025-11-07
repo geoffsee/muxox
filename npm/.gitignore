@@ -1,0 +1,7 @@
+node_modules/
+bin/muxox
+bin/muxox.exe
+bin/*.tar.gz
+bin/*.zip
+*.log
+.DS_Store

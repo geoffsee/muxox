@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.DS_Store
+.git
+.gitignore
+test/
+tests/
+*.tar.gz
+*.zip
+bin/muxox
+bin/muxox.exe
+bin/*.tar.gz
+bin/*.zip

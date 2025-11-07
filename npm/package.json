@@ -1,0 +1,36 @@
+{
+  "name": "muxox",
+  "version": "0.1.5",
+  "description": "A terminal-based service orchestrator and process multiplexer for development workflows",
+  "author": "Geoff Seemueller <geoff@seemueller.io>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/geoffsee/muxox.git"
+  },
+  "homepage": "https://github.com/geoffsee/muxox",
+  "keywords": [
+    "terminal",
+    "tui",
+    "multiplexer",
+    "development",
+    "process-manager",
+    "cli"
+  ],
+  "bin": {
+    "muxox": "./bin/muxox.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js",
+    "sync-version": "node sync-version.js"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "install.js",
+    "README.md"
+  ]
+}

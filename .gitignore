@@ -8,5 +8,7 @@
 !README.md
 !example/
 !example/**
+!npm/
+!npm/**
 !workflows
 !muxox.png

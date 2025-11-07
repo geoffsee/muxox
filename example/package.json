@@ -5,7 +5,9 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "npx muxox"
+    "start": "bun run bin",
+    "bin": "../target/release/muxox",
+    "build": "(cd ../ && cargo build --release)"
   },
   "devDependencies": {
     "@types/bun": "latest"

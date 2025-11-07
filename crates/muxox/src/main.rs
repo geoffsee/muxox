@@ -21,7 +21,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, Clear},
 };
 use serde::Deserialize;
 #[cfg(windows)]
@@ -143,6 +143,7 @@ mod tests {
             cwd: None,
             log_capacity: 10,
             interactive: false,
+            pty: false,
         };
 
         let mut state = ServiceState::new(cfg.clone());
@@ -395,6 +396,12 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
             .split(f.area())
     };
 
+    // Clear all drawing areas to prevent visual artifacts when layout changes
+    f.render_widget(Clear, main_chunks[0]);
+    if app.input_mode {
+        f.render_widget(Clear, main_chunks[1]);
+    }
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -479,7 +486,11 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let offset_from_end = app.log_offset_from_end.min(max_top);
     let scroll_top = max_top.saturating_sub(offset_from_end);
 
-    let log_text: Vec<Line> = selected.log.iter().map(|l| Line::from(l.clone())).collect();
+    let log_text: Vec<Line> = selected
+        .log
+        .iter()
+        .map(|l| ansi_to_line(l))
+        .collect();
     let log = Paragraph::new(log_text)
         .wrap(Wrap { trim: false })
         .scroll((scroll_top, 0))
@@ -787,15 +798,17 @@ fn start_service(idx: usize, app: &mut App) {
                 // stdout
                 if let Some(out) = child.stdout.take() {
                     let tx2 = tx.clone();
+                    let is_pty = sc.pty;
                     task::spawn(async move {
-                        stream_log_realtime(idx, out, tx2, false).await;
+                        stream_log_realtime(idx, out, tx2, false, is_pty).await;
                     });
                 }
                 // stderr
                 if let Some(err) = child.stderr.take() {
                     let tx2 = tx.clone();
+                    let is_pty = sc.pty;
                     task::spawn(async move {
-                        stream_log_realtime(idx, err, tx2, true).await;
+                        stream_log_realtime(idx, err, tx2, true, is_pty).await;
                     });
                 }
 
@@ -812,11 +825,13 @@ fn start_service(idx: usize, app: &mut App) {
     });
 }
 
-async fn stream_log_realtime<R>(idx: usize, stream: R, tx: mpsc::UnboundedSender<AppMsg>, is_stderr: bool)
+async fn stream_log_realtime<R>(idx: usize, stream: R, tx: mpsc::UnboundedSender<AppMsg>, is_stderr: bool, is_pty: bool)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut lines = tokio::io::BufReader::new(stream).lines();
+    let mut buffer = String::new();
+    let mut last_flush = tokio::time::Instant::now();
 
     while let Ok(Some(line)) = lines.next_line().await {
         // Handle carriage returns for progress indicators (keep this for compatibility)
@@ -827,11 +842,51 @@ where
         let piece = last_nonempty.unwrap_or(&line);
         if piece.is_empty() { continue; }
 
-        // Simple pass-through - this worked fine for AI chat before
-        if is_stderr {
-            let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", piece)));
+        // For PTY mode, buffer single characters
+        if is_pty && piece.len() <= 2 {
+            buffer.push_str(piece);
+
+            // Flush if buffer is getting large or timeout
+            let now = tokio::time::Instant::now();
+            if buffer.len() >= 80 || now.duration_since(last_flush).as_millis() > 100 {
+                if !buffer.is_empty() {
+                    if is_stderr {
+                        let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", buffer)));
+                    } else {
+                        let _ = tx.send(AppMsg::Log(idx, buffer.clone()));
+                    }
+                    buffer.clear();
+                    last_flush = now;
+                }
+            }
         } else {
-            let _ = tx.send(AppMsg::Log(idx, piece.to_string()));
+            // For longer lines or non-PTY mode, flush buffer then send line
+            if !buffer.is_empty() {
+                buffer.push_str(piece);
+                if is_stderr {
+                    let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", buffer)));
+                } else {
+                    let _ = tx.send(AppMsg::Log(idx, buffer.clone()));
+                }
+                buffer.clear();
+                last_flush = tokio::time::Instant::now();
+            } else {
+                // Simple pass-through for non-PTY or longer lines
+                if is_stderr {
+                    let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", piece)));
+                } else {
+                    let _ = tx.send(AppMsg::Log(idx, piece.to_string()));
+                }
+            }
+        }
+    }
+
+    // Flush any remaining buffer
+    if !buffer.is_empty() {
+        if is_stderr {
+            let _ = tx.send(AppMsg::Log(idx, format!("ERR: {}", buffer)));
+        } else {
+            let _ = tx.send(AppMsg::Log(idx, buffer));
         }
     }
 }
@@ -1096,5 +1151,168 @@ fn handle_mouse(m: MouseEvent, app: &mut App) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+
+// --- ANSI to Ratatui helpers ---
+fn ansi_to_line(s: &str) -> Line {
+    // Robust ANSI CSI parser that preserves UTF-8 text
+    // - Skips any CSI sequence (ESC [ ... final-byte) that is not SGR ('m')
+    // - For SGR, applies style to subsequent text
+    // - Flushes plain text as UTF-8 slices instead of per-byte casting
+    let mut spans: Vec<Span> = Vec::new();
+    let mut style = Style::default();
+
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    let mut text_start = 0usize; // beginning of the next plain-text run
+
+    while i < bytes.len() {
+        if bytes[i] == 0x1B && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            // Flush preceding UTF-8 text
+            if text_start < i {
+                let seg = match std::str::from_utf8(&bytes[text_start..i]) {
+                    Ok(seg) => seg.to_string(),
+                    Err(_) => String::from_utf8_lossy(&bytes[text_start..i]).to_string(),
+                };
+                if !seg.is_empty() {
+                    spans.push(Span::styled(seg, style));
+                }
+            }
+
+            // Parse CSI: ESC [ ... final (0x40..=0x7E)
+            let mut j = i + 2;
+            while j < bytes.len() {
+                let b = bytes[j];
+                if (0x40..=0x7E).contains(&b) { break; }
+                j += 1;
+            }
+            if j >= bytes.len() {
+                // Incomplete sequence; stop processing further
+                break;
+            }
+            let final_byte = bytes[j] as char;
+            if final_byte == 'm' {
+                let params = std::str::from_utf8(&bytes[i + 2..j]).unwrap_or("");
+                // Handle private mode prefix like "?25" by trimming leading '?'
+                let params = params.trim_start_matches('?');
+                apply_sgr(params, &mut style);
+            }
+
+            // Move past the entire CSI sequence
+            i = j + 1;
+            text_start = i;
+            continue;
+        }
+        i += 1;
+    }
+
+    // Flush any remaining text
+    if text_start < bytes.len() {
+        let seg = match std::str::from_utf8(&bytes[text_start..]) {
+            Ok(seg) => seg.to_string(),
+            Err(_) => String::from_utf8_lossy(&bytes[text_start..]).to_string(),
+        };
+        if !seg.is_empty() {
+            spans.push(Span::styled(seg, style));
+        }
+    }
+
+    Line::from(spans)
+}
+
+fn apply_sgr(seq: &str, style: &mut Style) {
+    if seq.is_empty() {
+        // ESC[m == reset
+        *style = Style::default();
+        return;
+    }
+    let parts: Vec<&str> = seq.split(';').collect();
+    let mut idx = 0usize;
+    while idx < parts.len() {
+        let p = parts[idx];
+        let Ok(code) = p.parse::<u16>() else { idx += 1; continue };
+        match code {
+            0 => { *style = Style::default(); }
+            1 => { *style = style.add_modifier(Modifier::BOLD); }
+            22 => { *style = style.remove_modifier(Modifier::BOLD); }
+            3 => { *style = style.add_modifier(Modifier::ITALIC); }
+            23 => { *style = style.remove_modifier(Modifier::ITALIC); }
+            4 => { *style = style.add_modifier(Modifier::UNDERLINED); }
+            24 => { *style = style.remove_modifier(Modifier::UNDERLINED); }
+            30..=37 => {
+                *style = style.fg(basic_color((code - 30) as u8));
+            }
+            39 => { *style = style.fg(Color::Reset); }
+            40..=47 => {
+                *style = style.bg(basic_color((code - 40) as u8));
+            }
+            49 => { *style = style.bg(Color::Reset); }
+            90..=97 => {
+                *style = style.fg(bright_color((code - 90) as u8));
+            }
+            100..=107 => {
+                *style = style.bg(bright_color((code - 100) as u8));
+            }
+            38 | 48 => {
+                // Extended colors: 38;5;n or 38;2;r;g;b
+                let is_fg = code == 38;
+                if idx + 1 < parts.len() {
+                    match parts[idx + 1] {
+                        "5" => { // 256-color
+                            if idx + 2 < parts.len() {
+                                if let Ok(n) = parts[idx + 2].parse::<u8>() {
+                                    let c = Color::Indexed(n);
+                                    *style = if is_fg { style.fg(c) } else { style.bg(c) };
+                                }
+                                idx += 2;
+                            }
+                        }
+                        "2" => { // truecolor
+                            if idx + 4 < parts.len() {
+                                let (r,g,b) = (
+                                    parts[idx + 2].parse::<u8>().unwrap_or(0),
+                                    parts[idx + 3].parse::<u8>().unwrap_or(0),
+                                    parts[idx + 4].parse::<u8>().unwrap_or(0),
+                                );
+                                let c = Color::Rgb(r,g,b);
+                                *style = if is_fg { style.fg(c) } else { style.bg(c) };
+                                idx += 4;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        idx += 1;
+    }
+}
+
+fn basic_color(n: u8) -> Color {
+    match n {
+        0 => Color::Black,
+        1 => Color::Red,
+        2 => Color::Green,
+        3 => Color::Yellow,
+        4 => Color::Blue,
+        5 => Color::Magenta,
+        6 => Color::Cyan,
+        _ => Color::White,
+    }
+}
+
+fn bright_color(n: u8) -> Color {
+    match n {
+        0 => Color::DarkGray,
+        1 => Color::LightRed,
+        2 => Color::LightGreen,
+        3 => Color::LightYellow,
+        4 => Color::LightBlue,
+        5 => Color::LightMagenta,
+        6 => Color::LightCyan,
+        _ => Color::White,
     }
 }

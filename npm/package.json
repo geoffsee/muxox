@@ -1,6 +1,6 @@
 {
   "name": "muxox",
-  "version": "0.1.5",
+  "version": "0.1.8",
   "description": "A terminal-based service orchestrator and process multiplexer for development workflows",
   "author": "Geoff Seemueller <geoff@seemueller.io>",
   "license": "MIT",

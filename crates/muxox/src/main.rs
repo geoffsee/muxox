@@ -291,10 +291,7 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
     // TUI setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    crossterm::execute!(
-        stdout,
-        crossterm::terminal::EnterAlternateScreen
-    )?;
+    crossterm::execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -321,7 +318,10 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
                     }
                     Event::Mouse(m) => {
                         // Only handle scroll events, ignore mouse movements
-                        if matches!(m.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+                        if matches!(
+                            m.kind,
+                            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                        ) {
                             handled = handle_mouse(m, &mut app);
                         }
                     }
@@ -637,10 +637,7 @@ fn cleanup_and_exit(app: &mut App) {
     // Restore terminal first to avoid leaving it raw if we panic later.
     let _ = disable_raw_mode();
     let mut stdout = io::stdout();
-    let _ = crossterm::execute!(
-        stdout,
-        crossterm::terminal::LeaveAlternateScreen
-    );
+    let _ = crossterm::execute!(stdout, crossterm::terminal::LeaveAlternateScreen);
 
     // Kill all children forcefully
     kill_all(app);

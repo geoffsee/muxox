@@ -4,8 +4,9 @@
 
 use std::{
     collections::VecDeque,
-    fs, io,
+    fs,
     fs::OpenOptions,
+    io,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Duration,
@@ -21,7 +22,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, Clear},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 use serde::Deserialize;
 #[cfg(windows)]
@@ -30,7 +31,7 @@ use std::sync::Arc;
 use tokio::{
     io::AsyncBufReadExt,
     process::{ChildStdin, Command as AsyncCommand},
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     task, time,
 };
 
@@ -486,11 +487,7 @@ fn draw_ui(f: &mut ratatui::Frame, app: &App) {
     let offset_from_end = app.log_offset_from_end.min(max_top);
     let scroll_top = max_top.saturating_sub(offset_from_end);
 
-    let log_text: Vec<Line> = selected
-        .log
-        .iter()
-        .map(|l| ansi_to_line(l))
-        .collect();
+    let log_text: Vec<Line> = selected.log.iter().map(|l| ansi_to_line(l)).collect();
     let log = Paragraph::new(log_text)
         .wrap(Wrap { trim: false })
         .scroll((scroll_top, 0))
@@ -541,20 +538,34 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
                     app.services[idx].push_log(format!("[DEBUG] Sending input: {:?}", input));
                     if let Some(stdin_writer) = app.services[idx].stdin_writer.clone() {
                         // Sanity logs mirroring the previous channel-based path
-                        app.services[idx].push_log(format!("[DEBUG] Input queued successfully: {:?}", input));
-                        app.services[idx].push_log("[DEBUG] Post-queue sanity: after queuing for direct writer".to_string());
-                        app.services[idx].push_log("[DEBUG] About to spawn direct writer task".to_string());
+                        app.services[idx]
+                            .push_log(format!("[DEBUG] Input queued successfully: {:?}", input));
+                        app.services[idx].push_log(
+                            "[DEBUG] Post-queue sanity: after queuing for direct writer"
+                                .to_string(),
+                        );
+                        app.services[idx]
+                            .push_log("[DEBUG] About to spawn direct writer task".to_string());
                         let input_for_task = input.clone();
                         let tx = app.tx.clone();
                         let idx_for_task = idx;
                         // Attempt write via async task
                         task::spawn(async move {
                             debug_file_log("spawn: task entered");
-                            let _ = tx.send(AppMsg::Log(idx_for_task, format!("[DEBUG] Direct write task started for: {:?}", input_for_task)));
+                            let _ = tx.send(AppMsg::Log(
+                                idx_for_task,
+                                format!(
+                                    "[DEBUG] Direct write task started for: {:?}",
+                                    input_for_task
+                                ),
+                            ));
                             use std::os::unix::io::{AsRawFd, BorrowedFd};
                             let mut guard = stdin_writer.lock().await;
                             debug_file_log("spawn: acquired lock");
-                            let _ = tx.send(AppMsg::Log(idx_for_task, "[DEBUG] Direct write acquired lock".to_string()));
+                            let _ = tx.send(AppMsg::Log(
+                                idx_for_task,
+                                "[DEBUG] Direct write acquired lock".to_string(),
+                            ));
                             let fd = guard.as_raw_fd();
                             // Perform a direct, blocking write to the child's stdin fd.
                             let mut total = 0;
@@ -567,17 +578,25 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
                                 match nix::unistd::write(borrowed, &bytes[total..]) {
                                     Ok(n) => {
                                         total += n;
-                                        if total >= bytes.len() { break; }
+                                        if total >= bytes.len() {
+                                            break;
+                                        }
                                     }
                                     Err(e) => {
                                         debug_file_log(&format!("spawn: nix::write failed: {}", e));
-                                        let _ = tx.send(AppMsg::Log(idx_for_task, format!("[DEBUG] Direct write (fd) failed: {}", e)));
+                                        let _ = tx.send(AppMsg::Log(
+                                            idx_for_task,
+                                            format!("[DEBUG] Direct write (fd) failed: {}", e),
+                                        ));
                                         return;
                                     }
                                 }
                             }
                             debug_file_log("spawn: write success");
-                            let _ = tx.send(AppMsg::Log(idx_for_task, format!("[DEBUG] Direct write success ({} bytes)", total)));
+                            let _ = tx.send(AppMsg::Log(
+                                idx_for_task,
+                                format!("[DEBUG] Direct write success ({} bytes)", total),
+                            ));
                         });
                         // Also attempt write on a plain OS thread in case the async task is starved
                         {
@@ -600,27 +619,44 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
                                             match nix::unistd::write(borrowed, &bytes[total..]) {
                                                 Ok(n) => {
                                                     total += n;
-                                                    if total >= bytes.len() { break; }
+                                                    if total >= bytes.len() {
+                                                        break;
+                                                    }
                                                 }
                                                 Err(e) => {
-                                                    debug_file_log(&format!("thread: nix::write failed: {}", e));
+                                                    debug_file_log(&format!(
+                                                        "thread: nix::write failed: {}",
+                                                        e
+                                                    ));
                                                     let _ = tx.send(AppMsg::Log(idx_for_thread, format!("[DEBUG] Direct write (thread) failed: {}", e)));
                                                     return;
                                                 }
                                             }
                                         }
                                         debug_file_log("thread: write success");
-                                        let _ = tx.send(AppMsg::Log(idx_for_thread, format!("[DEBUG] Direct write (thread) success ({} bytes)", total)));
+                                        let _ = tx.send(AppMsg::Log(
+                                            idx_for_thread,
+                                            format!(
+                                                "[DEBUG] Direct write (thread) success ({} bytes)",
+                                                total
+                                            ),
+                                        ));
                                         return;
                                     }
                                     std::thread::sleep(std::time::Duration::from_millis(5));
                                 }
-                                let _ = tx.send(AppMsg::Log(idx_for_thread, "[DEBUG] Direct write (thread) could not acquire lock".to_string()));
+                                let _ = tx.send(AppMsg::Log(
+                                    idx_for_thread,
+                                    "[DEBUG] Direct write (thread) could not acquire lock"
+                                        .to_string(),
+                                ));
                             });
                         }
-                        app.services[idx].push_log("[DEBUG] Spawned direct writer task".to_string());
+                        app.services[idx]
+                            .push_log("[DEBUG] Spawned direct writer task".to_string());
                     } else {
-                        app.services[idx].push_log("[DEBUG] stdin_writer not available yet!".to_string());
+                        app.services[idx]
+                            .push_log("[DEBUG] stdin_writer not available yet!".to_string());
                     }
                     app.input_buffer.clear();
                 } else {
@@ -714,7 +750,10 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
 fn toggle_selected(app: &mut App) {
     let idx = app.selected;
     let status = app.services[idx].status;
-    app.services[idx].push_log(format!("[DEBUG] toggle_selected called, status: {:?}", status));
+    app.services[idx].push_log(format!(
+        "[DEBUG] toggle_selected called, status: {:?}",
+        status
+    ));
     match status {
         Status::Stopped => {
             app.services[idx].push_log("[DEBUG] Starting service from toggle".to_string());
@@ -748,8 +787,13 @@ fn start_service(idx: usize, app: &mut App) {
         let mut cmd = {
             if sc.interactive && sc.pty {
                 let mut c = AsyncCommand::new(interactive_program());
-                for a in interactive_args(&sc.cmd) { c.arg(a); }
-                let _ = tx.send(AppMsg::Log(idx, "[DEBUG] Launching interactive via PTY wrapper (script)".to_string()));
+                for a in interactive_args(&sc.cmd) {
+                    c.arg(a);
+                }
+                let _ = tx.send(AppMsg::Log(
+                    idx,
+                    "[DEBUG] Launching interactive via PTY wrapper (script)".to_string(),
+                ));
                 c
             } else {
                 let mut c = AsyncCommand::new(shell_program());
@@ -767,12 +811,12 @@ fn start_service(idx: usize, app: &mut App) {
             cmd.current_dir(cwd);
         }
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-        
+
         // Interactive services need stdin piped so we can send input
         if sc.interactive {
             cmd.stdin(Stdio::piped());
         }
-        
+
         set_process_group(&mut cmd);
 
         match cmd.spawn() {
@@ -785,13 +829,22 @@ fn start_service(idx: usize, app: &mut App) {
 
                 // For interactive services, setup stdin forwarding
                 if sc.interactive {
-                    let _ = tx.send(AppMsg::Log(idx, "[DEBUG] Service is interactive, setting up stdin forwarding".to_string()));
+                    let _ = tx.send(AppMsg::Log(
+                        idx,
+                        "[DEBUG] Service is interactive, setting up stdin forwarding".to_string(),
+                    ));
                     if let Some(stdin) = child.stdin.take() {
-                        let _ = tx.send(AppMsg::Log(idx, "[DEBUG] child.stdin is available".to_string()));
+                        let _ = tx.send(AppMsg::Log(
+                            idx,
+                            "[DEBUG] child.stdin is available".to_string(),
+                        ));
                         // Publish a direct-writer handle (Arc<Mutex<ChildStdin>>) back to the app
                         let writer = Arc::new(Mutex::new(stdin));
                         let _ = tx.send(AppMsg::StdinWriterReady(idx, writer));
-                        let _ = tx.send(AppMsg::Log(idx, "[DEBUG] StdinWriterReady message sent".to_string()));
+                        let _ = tx.send(AppMsg::Log(
+                            idx,
+                            "[DEBUG] StdinWriterReady message sent".to_string(),
+                        ));
                     }
                 }
 
@@ -825,8 +878,13 @@ fn start_service(idx: usize, app: &mut App) {
     });
 }
 
-async fn stream_log_realtime<R>(idx: usize, stream: R, tx: mpsc::UnboundedSender<AppMsg>, is_stderr: bool, is_pty: bool)
-where
+async fn stream_log_realtime<R>(
+    idx: usize,
+    stream: R,
+    tx: mpsc::UnboundedSender<AppMsg>,
+    is_stderr: bool,
+    is_pty: bool,
+) where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut lines = tokio::io::BufReader::new(stream).lines();
@@ -837,10 +895,14 @@ where
         // Handle carriage returns for progress indicators (keep this for compatibility)
         let mut last_nonempty: Option<&str> = None;
         for piece in line.split('\r') {
-            if !piece.is_empty() { last_nonempty = Some(piece); }
+            if !piece.is_empty() {
+                last_nonempty = Some(piece);
+            }
         }
         let piece = last_nonempty.unwrap_or(&line);
-        if piece.is_empty() { continue; }
+        if piece.is_empty() {
+            continue;
+        }
 
         // For PTY mode, buffer single characters
         if is_pty && piece.len() <= 2 {
@@ -891,7 +953,6 @@ where
     }
 }
 
-
 fn stop_service(idx: usize, app: &mut App) {
     let sc = &mut app.services[idx];
     if !matches!(sc.status, Status::Running | Status::Starting) {
@@ -927,7 +988,8 @@ fn apply_msg(app: &mut App, msg: AppMsg) {
             app.services[i].push_log(format!("[process started with PID {pid}]"));
         }
         AppMsg::StdinReady(i, stdin_tx) => {
-            app.services[i].push_log("[DEBUG] StdinReady received in apply_msg, storing stdin_tx".to_string());
+            app.services[i]
+                .push_log("[DEBUG] StdinReady received in apply_msg, storing stdin_tx".to_string());
             app.services[i].stdin_tx = Some(stdin_tx);
             app.services[i].push_log("[DEBUG] stdin_tx stored successfully".to_string());
         }
@@ -1154,7 +1216,6 @@ fn handle_mouse(m: MouseEvent, app: &mut App) -> bool {
     }
 }
 
-
 // --- ANSI to Ratatui helpers ---
 fn ansi_to_line(s: &str) -> Line {
     // Robust ANSI CSI parser that preserves UTF-8 text
@@ -1185,7 +1246,9 @@ fn ansi_to_line(s: &str) -> Line {
             let mut j = i + 2;
             while j < bytes.len() {
                 let b = bytes[j];
-                if (0x40..=0x7E).contains(&b) { break; }
+                if (0x40..=0x7E).contains(&b) {
+                    break;
+                }
                 j += 1;
             }
             if j >= bytes.len() {
@@ -1232,23 +1295,44 @@ fn apply_sgr(seq: &str, style: &mut Style) {
     let mut idx = 0usize;
     while idx < parts.len() {
         let p = parts[idx];
-        let Ok(code) = p.parse::<u16>() else { idx += 1; continue };
+        let Ok(code) = p.parse::<u16>() else {
+            idx += 1;
+            continue;
+        };
         match code {
-            0 => { *style = Style::default(); }
-            1 => { *style = style.add_modifier(Modifier::BOLD); }
-            22 => { *style = style.remove_modifier(Modifier::BOLD); }
-            3 => { *style = style.add_modifier(Modifier::ITALIC); }
-            23 => { *style = style.remove_modifier(Modifier::ITALIC); }
-            4 => { *style = style.add_modifier(Modifier::UNDERLINED); }
-            24 => { *style = style.remove_modifier(Modifier::UNDERLINED); }
+            0 => {
+                *style = Style::default();
+            }
+            1 => {
+                *style = style.add_modifier(Modifier::BOLD);
+            }
+            22 => {
+                *style = style.remove_modifier(Modifier::BOLD);
+            }
+            3 => {
+                *style = style.add_modifier(Modifier::ITALIC);
+            }
+            23 => {
+                *style = style.remove_modifier(Modifier::ITALIC);
+            }
+            4 => {
+                *style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            24 => {
+                *style = style.remove_modifier(Modifier::UNDERLINED);
+            }
             30..=37 => {
                 *style = style.fg(basic_color((code - 30) as u8));
             }
-            39 => { *style = style.fg(Color::Reset); }
+            39 => {
+                *style = style.fg(Color::Reset);
+            }
             40..=47 => {
                 *style = style.bg(basic_color((code - 40) as u8));
             }
-            49 => { *style = style.bg(Color::Reset); }
+            49 => {
+                *style = style.bg(Color::Reset);
+            }
             90..=97 => {
                 *style = style.fg(bright_color((code - 90) as u8));
             }
@@ -1260,7 +1344,8 @@ fn apply_sgr(seq: &str, style: &mut Style) {
                 let is_fg = code == 38;
                 if idx + 1 < parts.len() {
                     match parts[idx + 1] {
-                        "5" => { // 256-color
+                        "5" => {
+                            // 256-color
                             if idx + 2 < parts.len() {
                                 if let Ok(n) = parts[idx + 2].parse::<u8>() {
                                     let c = Color::Indexed(n);
@@ -1269,14 +1354,15 @@ fn apply_sgr(seq: &str, style: &mut Style) {
                                 idx += 2;
                             }
                         }
-                        "2" => { // truecolor
+                        "2" => {
+                            // truecolor
                             if idx + 4 < parts.len() {
-                                let (r,g,b) = (
+                                let (r, g, b) = (
                                     parts[idx + 2].parse::<u8>().unwrap_or(0),
                                     parts[idx + 3].parse::<u8>().unwrap_or(0),
                                     parts[idx + 4].parse::<u8>().unwrap_or(0),
                                 );
-                                let c = Color::Rgb(r,g,b);
+                                let c = Color::Rgb(r, g, b);
                                 *style = if is_fg { style.fg(c) } else { style.bg(c) };
                                 idx += 4;
                             }

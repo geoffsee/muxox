@@ -771,6 +771,7 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
                         let tx = app.tx.clone();
                         let idx_for_task = idx;
                         // Attempt write via async task
+                        #[cfg(unix)]
                         task::spawn(async move {
                             debug_file_log("spawn: task entered");
                             let _ = tx.send(AppMsg::Log(
@@ -819,12 +820,52 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
                                 format!("[DEBUG] Direct write success ({} bytes)", total),
                             ));
                         });
+                        #[cfg(windows)]
+                        task::spawn(async move {
+                            debug_file_log("spawn: task entered");
+                            let _ = tx.send(AppMsg::Log(
+                                idx_for_task,
+                                format!(
+                                    "[DEBUG] Direct write task started for: {:?}",
+                                    input_for_task
+                                ),
+                            ));
+                            use tokio::io::AsyncWriteExt;
+                            let mut guard = stdin_writer.lock().await;
+                            debug_file_log("spawn: acquired lock");
+                            let _ = tx.send(AppMsg::Log(
+                                idx_for_task,
+                                "[DEBUG] Direct write acquired lock".to_string(),
+                            ));
+                            let data = format!("{}\r", input_for_task);
+                            match guard.write_all(data.as_bytes()).await {
+                                Ok(()) => {
+                                    let _ = guard.flush().await;
+                                    debug_file_log("spawn: write success");
+                                    let _ = tx.send(AppMsg::Log(
+                                        idx_for_task,
+                                        format!(
+                                            "[DEBUG] Direct write success ({} bytes)",
+                                            data.len()
+                                        ),
+                                    ));
+                                }
+                                Err(e) => {
+                                    debug_file_log(&format!("spawn: write failed: {}", e));
+                                    let _ = tx.send(AppMsg::Log(
+                                        idx_for_task,
+                                        format!("[DEBUG] Direct write failed: {}", e),
+                                    ));
+                                }
+                            }
+                        });
                         // Also attempt write on a plain OS thread in case the async task is starved
                         {
                             let tx = app.tx.clone();
                             let stdin_writer = app.services[idx].stdin_writer.clone().unwrap();
                             let input_for_thread = input.clone();
                             let idx_for_thread = idx;
+                            #[cfg(unix)]
                             std::thread::spawn(move || {
                                 debug_file_log("thread: started");
                                 use std::os::unix::io::{AsRawFd, BorrowedFd};
@@ -862,6 +903,49 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
                                                 total
                                             ),
                                         ));
+                                        return;
+                                    }
+                                    std::thread::sleep(std::time::Duration::from_millis(5));
+                                }
+                                let _ = tx.send(AppMsg::Log(
+                                    idx_for_thread,
+                                    "[DEBUG] Direct write (thread) could not acquire lock"
+                                        .to_string(),
+                                ));
+                            });
+                            #[cfg(windows)]
+                            std::thread::spawn(move || {
+                                debug_file_log("thread: started");
+                                use std::io::Write;
+                                for _ in 0..50 {
+                                    if let Ok(mut guard) = stdin_writer.try_lock() {
+                                        let data = format!("{}\r", input_for_thread);
+                                        match guard.write_all(data.as_bytes()) {
+                                            Ok(()) => {
+                                                let _ = guard.flush();
+                                                debug_file_log("thread: write success");
+                                                let _ = tx.send(AppMsg::Log(
+                                                    idx_for_thread,
+                                                    format!(
+                                                        "[DEBUG] Direct write (thread) success ({} bytes)",
+                                                        data.len()
+                                                    ),
+                                                ));
+                                            }
+                                            Err(e) => {
+                                                debug_file_log(&format!(
+                                                    "thread: write failed: {}",
+                                                    e
+                                                ));
+                                                let _ = tx.send(AppMsg::Log(
+                                                    idx_for_thread,
+                                                    format!(
+                                                        "[DEBUG] Direct write (thread) failed: {}",
+                                                        e
+                                                    ),
+                                                ));
+                                            }
+                                        }
                                         return;
                                     }
                                     std::thread::sleep(std::time::Duration::from_millis(5));

@@ -913,49 +913,13 @@ fn handle_key(k: KeyEvent, app: &mut App) -> bool {
                                         .to_string(),
                                 ));
                             });
+                            // On Windows, tokio::sync::MutexGuard<ChildStdin> does not
+                            // implement std::io::Write, so we skip the OS-thread fallback
+                            // and rely on the async task above.
                             #[cfg(windows)]
-                            std::thread::spawn(move || {
-                                debug_file_log("thread: started");
-                                use std::io::Write;
-                                for _ in 0..50 {
-                                    if let Ok(mut guard) = stdin_writer.try_lock() {
-                                        let data = format!("{}\r", input_for_thread);
-                                        match guard.write_all(data.as_bytes()) {
-                                            Ok(()) => {
-                                                let _ = guard.flush();
-                                                debug_file_log("thread: write success");
-                                                let _ = tx.send(AppMsg::Log(
-                                                    idx_for_thread,
-                                                    format!(
-                                                        "[DEBUG] Direct write (thread) success ({} bytes)",
-                                                        data.len()
-                                                    ),
-                                                ));
-                                            }
-                                            Err(e) => {
-                                                debug_file_log(&format!(
-                                                    "thread: write failed: {}",
-                                                    e
-                                                ));
-                                                let _ = tx.send(AppMsg::Log(
-                                                    idx_for_thread,
-                                                    format!(
-                                                        "[DEBUG] Direct write (thread) failed: {}",
-                                                        e
-                                                    ),
-                                                ));
-                                            }
-                                        }
-                                        return;
-                                    }
-                                    std::thread::sleep(std::time::Duration::from_millis(5));
-                                }
-                                let _ = tx.send(AppMsg::Log(
-                                    idx_for_thread,
-                                    "[DEBUG] Direct write (thread) could not acquire lock"
-                                        .to_string(),
-                                ));
-                            });
+                            {
+                                let _ = (tx, stdin_writer, input_for_thread, idx_for_thread);
+                            }
                         }
                         app.services[idx]
                             .push_log("[DEBUG] Spawned direct writer task".to_string());

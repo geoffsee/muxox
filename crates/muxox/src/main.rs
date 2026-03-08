@@ -16,25 +16,25 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::{Html, IntoResponse},
     routing::get,
-    Router,
 };
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
-    Terminal,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
@@ -42,7 +42,7 @@ use std::os::windows::process::CommandExt as _;
 use tokio::{
     io::AsyncBufReadExt,
     process::{ChildStdin, Command as AsyncCommand},
-    sync::{broadcast, mpsc, Mutex},
+    sync::{Mutex, broadcast, mpsc},
     task, time,
 };
 
@@ -157,7 +157,10 @@ mod tests {
 
         assert_eq!(cfg.service[1].name, "example-service-1");
         assert_eq!(cfg.service[1].cmd, "bun ./index.ts");
-        assert_eq!(cfg.service[1].cwd, Some(PathBuf::from("example/packages/example-service-1")));
+        assert_eq!(
+            cfg.service[1].cwd,
+            Some(PathBuf::from("example/packages/example-service-1"))
+        );
         assert_eq!(cfg.service[1].log_capacity, 5000);
     }
 
@@ -338,9 +341,8 @@ async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
             };
 
             if let Some(msg) = ws_msg {
-                let _ = b_tx_clone.send(
-                    serde_json::to_vec(&msg).expect("WsOutbound serialization cannot fail"),
-                );
+                let _ = b_tx_clone
+                    .send(serde_json::to_vec(&msg).expect("WsOutbound serialization cannot fail"));
             }
 
             if matches!(msg, AppMsg::AbortedAll) {
@@ -383,10 +385,7 @@ async fn index_handler() -> impl IntoResponse {
     Html(web_ui::render_index())
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<WebState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<WebState>>) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_socket(socket, state))
 }
 
@@ -428,7 +427,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<WebState>) {
             let Some(cmd) = WsInbound::from_message(msg) else {
                 continue;
             };
-            let WsInbound::Command { idx, command, input } = cmd;
+            let WsInbound::Command {
+                idx,
+                command,
+                input,
+            } = cmd;
             let mut app = app_clone.lock().await;
             if idx >= app.services.len() {
                 continue;
@@ -442,11 +445,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<WebState>) {
                         let mut writer_guard = writer.lock().await;
                         use tokio::io::AsyncWriteExt;
                         let input_with_newline = format!("{}\n", input);
-                        if let Err(e) = writer_guard.write_all(input_with_newline.as_bytes()).await {
-                            app.services[idx].push_log(format!("[ERROR] Failed to write to stdin: {}", e));
+                        if let Err(e) = writer_guard.write_all(input_with_newline.as_bytes()).await
+                        {
+                            app.services[idx]
+                                .push_log(format!("[ERROR] Failed to write to stdin: {}", e));
                         }
                         if let Err(e) = writer_guard.flush().await {
-                            app.services[idx].push_log(format!("[ERROR] Failed to flush stdin: {}", e));
+                            app.services[idx]
+                                .push_log(format!("[ERROR] Failed to flush stdin: {}", e));
                         }
                     }
                 }
@@ -1264,7 +1270,8 @@ fn load_config(provided: Option<&Path>) -> Result<Config> {
 fn set_process_group(cmd: &mut AsyncCommand) {
     unsafe {
         cmd.pre_exec(|| {
-            let _ = nix::unistd::setpgid(nix::unistd::Pid::from_raw(0), nix::unistd::Pid::from_raw(0));
+            let _ =
+                nix::unistd::setpgid(nix::unistd::Pid::from_raw(0), nix::unistd::Pid::from_raw(0));
             Ok(())
         });
     }

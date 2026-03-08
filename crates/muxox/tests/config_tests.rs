@@ -48,7 +48,10 @@ fn parses_sample_config() {
 
     assert_eq!(cfg.services[1].name, "example-service-1");
     assert_eq!(cfg.services[1].cmd, "bun ./index.ts");
-    assert_eq!(cfg.services[1].cwd, Some(PathBuf::from("example/packages/example-service-1")));
+    assert_eq!(
+        cfg.services[1].cwd,
+        Some(PathBuf::from("example/packages/example-service-1"))
+    );
     assert_eq!(cfg.services[1].log_capacity, 5000);
 }
 
@@ -116,7 +119,8 @@ fn parses_real_muxox_toml() {
     let result = std::fs::read_to_string("../../muxox.example.toml");
 
     if let Ok(contents) = result {
-        let cfg: TestConfig = toml::from_str(&contents).expect("real muxox.example.toml should be valid");
+        let cfg: TestConfig =
+            toml::from_str(&contents).expect("real muxox.example.toml should be valid");
         assert!(
             !cfg.services.is_empty(),
             "muxox.example.toml should have at least one service"

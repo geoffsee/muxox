@@ -10,5 +10,7 @@
 !example/**
 !npm/
 !npm/**
+!scripts/
+!scripts/**
 !workflows
 !muxox.png

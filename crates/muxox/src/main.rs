@@ -7,33 +7,49 @@ use std::{
     fs,
     fs::OpenOptions,
     io,
+    net::SocketAddr,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::Arc,
     time::Duration,
 };
 
 use anyhow::{Context, Result};
+use axum::{
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
+    response::{Html, IntoResponse},
+    routing::get,
+    Router,
+};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use futures_util::{SinkExt, StreamExt};
 use ratatui::{
-    Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    Terminal,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt as _;
-use std::sync::Arc;
 use tokio::{
     io::AsyncBufReadExt,
     process::{ChildStdin, Command as AsyncCommand},
-    sync::{Mutex, mpsc},
+    sync::{broadcast, mpsc, Mutex},
     task, time,
 };
+
+mod web_ui;
+mod ws_proto;
+
+use ws_proto::{ServiceInfo, WsInbound, WsOutbound};
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run multiple dev servers with a simple TUI.")]
@@ -41,9 +57,15 @@ struct Cli {
     /// Optional path to a services config (TOML). If omitted, looks in: $PWD/muxox.toml then app dirs.
     #[arg(short, long)]
     config: Option<PathBuf>,
-    /// Run in non-interactive mode, outputting raw logs instead of TUI
+    /// Run in non-interactive mode, outputting raw logs instead of TUI or Web UI
     #[arg(long)]
     raw: bool,
+    /// Run in TUI mode
+    #[arg(long)]
+    tui: bool,
+    /// Port for the Web UI (default: 8772)
+    #[arg(short, long, default_value_t = 8772)]
+    port: u16,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -111,29 +133,32 @@ mod tests {
     fn test_config_deserialize() {
         let toml_input = r#"
             [[service]]
-            name = "frontend"
-            cmd = "pnpm client:dev"
-            cwd = "./"
-            log_capacity = 5000
+            name = "test-stdin"
+            cmd = "./test-stdin.sh"
+            cwd = "./example"
+            log_capacity = 250
+            interactive = true
 
             [[service]]
-            name = "backend"
-            cmd = "pnpm server:dev"
-            cwd = "./"
+            name = "example-service-1"
+            cmd = "bun ./index.ts"
+            cwd = "example/packages/example-service-1"
+            log_capacity = 5000
         "#;
 
         let cfg: Config = toml::from_str(toml_input).expect("Valid Config");
         assert_eq!(cfg.service.len(), 2);
 
-        assert_eq!(cfg.service[0].name, "frontend");
-        assert_eq!(cfg.service[0].cmd, "pnpm client:dev");
-        assert_eq!(cfg.service[0].cwd, Some(PathBuf::from("./")));
-        assert_eq!(cfg.service[0].log_capacity, 5000);
+        assert_eq!(cfg.service[0].name, "test-stdin");
+        assert_eq!(cfg.service[0].cmd, "./test-stdin.sh");
+        assert_eq!(cfg.service[0].cwd, Some(PathBuf::from("./example")));
+        assert_eq!(cfg.service[0].log_capacity, 250);
+        assert_eq!(cfg.service[0].interactive, true);
 
-        assert_eq!(cfg.service[1].name, "backend");
-        assert_eq!(cfg.service[1].cmd, "pnpm server:dev");
-        assert_eq!(cfg.service[1].cwd, Some(PathBuf::from("./")));
-        assert_eq!(cfg.service[1].log_capacity, default_log_capacity());
+        assert_eq!(cfg.service[1].name, "example-service-1");
+        assert_eq!(cfg.service[1].cmd, "bun ./index.ts");
+        assert_eq!(cfg.service[1].cwd, Some(PathBuf::from("example/packages/example-service-1")));
+        assert_eq!(cfg.service[1].log_capacity, 5000);
     }
 
     #[test]
@@ -173,12 +198,23 @@ mod tests {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 enum Status {
     Stopped,
     Starting,
     Running,
     Stopping,
+}
+
+impl Status {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopped => "Stopped",
+            Self::Starting => "Starting",
+            Self::Running => "Running",
+            Self::Stopping => "Stopping",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -225,7 +261,7 @@ struct App {
     input_buffer: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum AppMsg {
     Started(usize),
     Stopped(usize, i32),
@@ -244,10 +280,185 @@ async fn main() -> Result<()> {
     if cli.raw {
         // Run in raw streaming mode
         run_raw_mode(cfg).await
-    } else {
+    } else if cli.tui {
         // Run in TUI mode
         run_tui_mode(cfg).await
+    } else {
+        // Run in Web UI mode
+        run_web_mode(cfg, cli.port).await
     }
+}
+
+async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
+    let (b_tx, _) = broadcast::channel::<Vec<u8>>(100);
+
+    let app = Arc::new(Mutex::new(App {
+        services: cfg.service.into_iter().map(ServiceState::new).collect(),
+        selected: 0,
+        log_offset_from_end: 0,
+        tx: tx.clone(),
+        input_mode: false,
+        input_buffer: String::new(),
+    }));
+
+    // Start all services
+    {
+        let mut app_lock = app.lock().await;
+        for idx in 0..app_lock.services.len() {
+            start_service(idx, &mut app_lock);
+        }
+    }
+
+    // Signal watcher
+    task::spawn(signal_watcher(tx.clone()));
+
+    // Broadcast messages to all connected WebSockets
+    let b_tx_clone = b_tx.clone();
+    let app_for_msgs = Arc::clone(&app);
+    task::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            let mut app_lock = app_for_msgs.lock().await;
+            apply_msg(&mut app_lock, msg.clone());
+
+            let ws_msg = match &msg {
+                AppMsg::Log(idx, line) => Some(WsOutbound::Log {
+                    idx: *idx,
+                    line: line.clone(),
+                }),
+                AppMsg::Started(idx) => Some(WsOutbound::Status {
+                    idx: *idx,
+                    status: "Running".into(),
+                }),
+                AppMsg::Stopped(idx, _) => Some(WsOutbound::Status {
+                    idx: *idx,
+                    status: "Stopped".into(),
+                }),
+                _ => None,
+            };
+
+            if let Some(msg) = ws_msg {
+                let _ = b_tx_clone.send(
+                    serde_json::to_vec(&msg).expect("WsOutbound serialization cannot fail"),
+                );
+            }
+
+            if matches!(msg, AppMsg::AbortedAll) {
+                kill_all(&mut app_lock);
+                std::process::exit(0);
+            }
+        }
+    });
+
+    let shared_state = Arc::new(WebState {
+        app: Arc::clone(&app),
+        broadcast_tx: b_tx,
+    });
+
+    let router = Router::new()
+        .route("/", get(index_handler))
+        .route("/ws", get(ws_handler))
+        .with_state(shared_state);
+
+    let addr: SocketAddr = format!("[::1]:{}", port).parse()?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let url = format!("http://localhost:{}", port);
+    println!("Web UI available at {}", url);
+
+    if let Err(e) = open::that(url) {
+        eprintln!("Failed to open browser: {}", e);
+    }
+
+    axum::serve(listener, router).await?;
+
+    Ok(())
+}
+
+struct WebState {
+    app: Arc<Mutex<App>>,
+    broadcast_tx: broadcast::Sender<Vec<u8>>,
+}
+
+async fn index_handler() -> impl IntoResponse {
+    Html(web_ui::render_index())
+}
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<WebState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_socket(socket, state))
+}
+
+async fn handle_socket(socket: WebSocket, state: Arc<WebState>) {
+    let (mut sender, mut receiver) = socket.split();
+    let mut b_rx = state.broadcast_tx.subscribe();
+
+    // Send initial state
+    {
+        let app = state.app.lock().await;
+        let services: Vec<ServiceInfo> = app
+            .services
+            .iter()
+            .map(|s| ServiceInfo {
+                name: s.cfg.name.clone(),
+                status: s.status.as_str().to_owned(),
+                logs: s.log.iter().cloned().collect(),
+                interactive: s.cfg.interactive,
+            })
+            .collect();
+        let init_msg = WsOutbound::Init { services };
+        if let Err(e) = sender.send(init_msg.to_message()).await {
+            eprintln!("Failed to send init msg: {}", e);
+            return;
+        }
+    }
+
+    let mut send_task = task::spawn(async move {
+        while let Ok(bytes) = b_rx.recv().await {
+            if sender.send(Message::Binary(bytes.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let app_clone = Arc::clone(&state.app);
+    let mut recv_task = task::spawn(async move {
+        while let Some(Ok(msg)) = receiver.next().await {
+            let Some(cmd) = WsInbound::from_message(msg) else {
+                continue;
+            };
+            let WsInbound::Command { idx, command, input } = cmd;
+            let mut app = app_clone.lock().await;
+            if idx >= app.services.len() {
+                continue;
+            }
+            match command.as_str() {
+                "start" => start_service(idx, &mut app),
+                "stop" => stop_service(idx, &mut app),
+                "stdin" => {
+                    let input = input.unwrap_or_default();
+                    if let Some(writer) = app.services[idx].stdin_writer.clone() {
+                        let mut writer_guard = writer.lock().await;
+                        use tokio::io::AsyncWriteExt;
+                        let input_with_newline = format!("{}\n", input);
+                        if let Err(e) = writer_guard.write_all(input_with_newline.as_bytes()).await {
+                            app.services[idx].push_log(format!("[ERROR] Failed to write to stdin: {}", e));
+                        }
+                        if let Err(e) = writer_guard.flush().await {
+                            app.services[idx].push_log(format!("[ERROR] Failed to flush stdin: {}", e));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
+    tokio::select! {
+        _ = (&mut send_task) => recv_task.abort(),
+        _ = (&mut recv_task) => send_task.abort(),
+    };
 }
 
 async fn run_raw_mode(cfg: Config) -> Result<()> {
@@ -303,6 +514,7 @@ async fn run_raw_mode(cfg: Config) -> Result<()> {
             }
             Some(AppMsg::AbortedAll) => {
                 eprintln!("All services aborted");
+                kill_all(&mut app);
                 break;
             }
             None => break,
@@ -373,6 +585,9 @@ async fn run_tui_mode(cfg: Config) -> Result<()> {
 
             // Drain channel
             while let Ok(msg) = rx.try_recv() {
+                if matches!(msg, AppMsg::AbortedAll) {
+                    cleanup_and_exit(&mut app);
+                }
                 apply_msg(&mut app, msg);
             }
         }
@@ -810,7 +1025,11 @@ fn start_service(idx: usize, app: &mut App) {
         if let Some(cwd) = sc.cwd.clone() {
             cmd.current_dir(cwd);
         }
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.env("FORCE_COLOR", "1")
+            .env("CLICOLOR_FORCE", "1")
+            .env("TERM", "xterm-256color")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         // Interactive services need stdin piped so we can send input
         if sc.interactive {
@@ -997,7 +1216,9 @@ fn apply_msg(app: &mut App, msg: AppMsg) {
             app.services[i].stdin_writer = Some(writer);
             app.services[i].push_log("[DEBUG] stdin_writer stored successfully".to_string());
         }
-        AppMsg::AbortedAll => { /* UI can optionally display something */ }
+        AppMsg::AbortedAll => {
+            // No action needed for UI state, handled by modes
+        }
     }
 }
 
@@ -1024,7 +1245,7 @@ fn load_config(provided: Option<&Path>) -> Result<Config> {
         Some(p) => vec![p.to_path_buf()],
         None => {
             let mut v = vec![PathBuf::from("muxox.toml")];
-            if let Some(proj) = directories::ProjectDirs::from("dev", "local", "devmux") {
+            if let Some(proj) = directories::ProjectDirs::from("dev", "local", "muxox") {
                 v.push(proj.config_dir().join("muxox.toml"));
             }
             v
@@ -1040,13 +1261,13 @@ fn load_config(provided: Option<&Path>) -> Result<Config> {
 }
 
 #[cfg(unix)]
-fn set_process_group(_cmd: &mut AsyncCommand) {
-    // Remove the unsafe pre_exec that was blocking concurrent execution
-    // The process group setting is not essential for basic functionality
-    // and was causing synchronous blocking in the async runtime
-    //
-    // If process group isolation is needed in the future, it should be
-    // implemented using process_group() method or other async-safe approaches
+fn set_process_group(cmd: &mut AsyncCommand) {
+    unsafe {
+        cmd.pre_exec(|| {
+            let _ = nix::unistd::setpgid(nix::unistd::Pid::from_raw(0), nix::unistd::Pid::from_raw(0));
+            Ok(())
+        });
+    }
 }
 #[cfg(windows)]
 fn set_process_group(cmd: &mut AsyncCommand) {

@@ -43,15 +43,17 @@ cargo install muxox
 1) Create a muxox.toml file in your project:
 ```toml
 [[service]]
-name = "frontend"
-cmd = "pnpm client:dev"
-cwd = "./"
-log_capacity = 5000
+name = "test-stdin"
+cmd = "./test-stdin.sh"
+cwd = "./example"
+log_capacity = 250
+interactive = true
 
 [[service]]
-name = "backend"
-cmd = "pnpm server:dev"
-cwd = "./"
+name = "example-service-1"
+cmd = "bun ./index.ts"
+cwd = "example/packages/example-service-1"
+log_capacity = 5000
 ```
 2) Run Muxox:
 ```bash
@@ -73,6 +75,8 @@ Each service supports:
 - name: Unique identifier (required)
 - cmd: Command to run (required)
 - cwd: Working directory (optional, defaults to current dir)
+- interactive: Whether the service requires stdin (optional, default: false)
+- pty: Whether to allocate a PTY for the service (Unix only, optional, default: false)
 - log_capacity: How many log lines to keep in memory (optional, default 2000)
 
 Tips:
@@ -101,6 +105,28 @@ Tips:
 
 - Can I use it for production?
   - Muxox is designed for development workflows. For production, consider a proper process supervisor or orchestrator.
+
+## Development Scripts and Makefile
+
+You can use either the shell scripts in `scripts/` or the provided `Makefile` to manage common development tasks.
+
+### Using Make
+
+- `make build`: Build the `muxox` binary.
+- `make test`: Run all tests.
+- `make lint`: Run formatting and linting checks.
+- `make run`: Run `muxox` using the example configuration file.
+- `make fmt`: Run `cargo fmt --all`.
+- `make clean`: Run `cargo clean`.
+
+### Using Scripts Directly
+
+The `scripts/` directory contains:
+
+- `./scripts/build.sh`: Build the `muxox` binary.
+- `./scripts/test.sh`: Run all tests.
+- `./scripts/lint.sh`: Run formatting and linting checks.
+- `./scripts/run-example.sh`: Run `muxox` using the example configuration file.
 
 ## Requirements
 

@@ -2,10 +2,7 @@
 // Copyright (c) 2025 Geoff Seemueller
 // This file is part of muxox, released under the MIT License.
 
-use crate::app::{App, AppMsg, ServiceState, apply_msg, kill_all, start_service, stop_service};
-use crate::config::Config;
-use crate::signal::signal_watcher;
-use crate::web_ui;
+use crate::ui;
 use crate::ws_proto::{ServiceInfo, WsInbound, WsOutbound};
 use anyhow::Result;
 use axum::{
@@ -18,6 +15,11 @@ use axum::{
     routing::get,
 };
 use futures_util::{SinkExt, StreamExt};
+use muxox_core::app::{
+    App, AppMsg, ServiceState, apply_msg, kill_all, start_service, stop_service,
+};
+use muxox_core::config::Config;
+use muxox_core::signal::signal_watcher;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
@@ -113,7 +115,7 @@ struct WebState {
 }
 
 async fn index_handler() -> impl IntoResponse {
-    Html(web_ui::render_index())
+    Html(ui::render_index())
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<WebState>>) -> impl IntoResponse {
@@ -146,7 +148,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<WebState>) {
 
     let mut send_task = task::spawn(async move {
         while let Ok(bytes) = b_rx.recv().await {
-            if sender.send(Message::Binary(bytes.into())).await.is_err() {
+            if sender.send(Message::Binary(bytes)).await.is_err() {
                 break;
             }
         }

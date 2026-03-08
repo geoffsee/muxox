@@ -4,7 +4,7 @@
 
 use crate::config::ServiceCfg;
 use crate::utils::{
-    interactive_args, interactive_program, set_process_group, shell_flag, shell_program, shell_exec,
+    interactive_args, interactive_program, set_process_group, shell_exec, shell_flag, shell_program,
 };
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -94,6 +94,7 @@ pub fn start_service(idx: usize, app: &mut App) {
     if matches!(app.services[idx].status, Status::Running | Status::Starting) {
         return;
     }
+    crate::log::debug(&format!("start_service idx={} name={}", idx, app.services[idx].cfg.name));
     app.services[idx].status = Status::Starting;
     let tx = app.tx.clone();
     let sc = app.services[idx].cfg.clone();
@@ -140,9 +141,11 @@ pub fn start_service(idx: usize, app: &mut App) {
 
         set_process_group(&mut cmd);
 
+        crate::log::debug(&format!("[task idx={idx}] spawning command: {:?}", sc.cmd));
         match cmd.spawn() {
             Ok(mut child) => {
                 let pid = child.id().unwrap_or_default();
+                crate::log::debug(&format!("[task idx={idx}] spawned pid={pid}"));
                 let _ = tx.send(AppMsg::Started(idx));
 
                 // Send the child handle back to be stored
@@ -192,6 +195,7 @@ pub fn start_service(idx: usize, app: &mut App) {
                 let _ = tx.send(AppMsg::Stopped(idx, code));
             }
             Err(e) => {
+                crate::log::debug(&format!("[task idx={idx}] spawn FAILED: {e}"));
                 let _ = tx.send(AppMsg::Log(idx, format!("spawn failed: {e}")));
                 let _ = tx.send(AppMsg::Stopped(idx, -1));
             }
@@ -241,9 +245,11 @@ pub fn stop_service(idx: usize, app: &mut App) {
 pub fn apply_msg(app: &mut App, msg: AppMsg) {
     match msg {
         AppMsg::Started(idx) => {
+            crate::log::debug(&format!("apply_msg: Started idx={idx}"));
             app.services[idx].status = Status::Running;
         }
         AppMsg::Stopped(idx, _code) => {
+            crate::log::debug(&format!("apply_msg: Stopped idx={idx} code={_code}"));
             app.services[idx].status = Status::Stopped;
             app.services[idx].child = None;
             app.services[idx].pid = None;
@@ -251,6 +257,7 @@ pub fn apply_msg(app: &mut App, msg: AppMsg) {
             app.services[idx].stdin_writer = None;
         }
         AppMsg::Log(idx, line) => {
+            crate::log::debug(&format!("apply_msg: Log idx={idx} len={}", line.len()));
             app.services[idx].push_log(line);
         }
         AppMsg::ChildSpawned(idx, pid) => {
@@ -285,7 +292,7 @@ pub fn kill_tree(idx: usize, app: &mut App) {
         let pgid = Pid::from_raw(pid as i32);
 
         // First try TERM signal to allow graceful shutdown
-        if let Err(_) = killpg(pgid, Signal::SIGTERM) {
+        if killpg(pgid, Signal::SIGTERM).is_err() {
             // If killpg fails (process group doesn't exist), try killing the process directly
             let _ = nix::sys::signal::kill(pgid, Signal::SIGTERM);
         }
@@ -294,7 +301,7 @@ pub fn kill_tree(idx: usize, app: &mut App) {
         std::thread::sleep(Duration::from_millis(250));
 
         // Then force kill if still running
-        if let Err(_) = killpg(pgid, Signal::SIGKILL) {
+        if killpg(pgid, Signal::SIGKILL).is_err() {
             // If killpg fails, try killing the process directly
             let _ = nix::sys::signal::kill(pgid, Signal::SIGKILL);
         }

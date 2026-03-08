@@ -8,11 +8,11 @@ use std::fs::OpenOptions;
 use tokio::process::Command as AsyncCommand;
 
 pub fn debug_file_log(msg: &str) {
-    if let Ok(path) = std::env::var("MUXOX_DEBUG_FILE") {
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-            use std::io::Write as _;
-            let _ = writeln!(f, "[{:?}] {}", std::thread::current().id(), msg);
-        }
+    if let Ok(path) = std::env::var("MUXOX_DEBUG_FILE")
+        && let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path)
+    {
+        use std::io::Write as _;
+        let _ = writeln!(f, "[{:?}] {}", std::thread::current().id(), msg);
     }
 }
 
@@ -80,7 +80,7 @@ pub fn interactive_args(cmd: &str) -> Vec<String> {
     ]
 }
 
-pub fn ansi_to_line(s: &str) -> Line<'_> {
+pub fn ansi_to_line(s: &str) -> Line<'static> {
     let mut spans: Vec<Span> = Vec::new();
     let mut style = Style::default();
 
@@ -202,20 +202,21 @@ fn apply_sgr(seq: &str, style: &mut Style) {
                         }
                         idx += 2;
                     }
-                } else if idx + 4 < parts.len() && parts[idx + 1] == "2" {
-                    if let (Ok(r), Ok(g), Ok(b)) = (
+                } else if idx + 4 < parts.len()
+                    && parts[idx + 1] == "2"
+                    && let (Ok(r), Ok(g), Ok(b)) = (
                         parts[idx + 2].parse::<u8>(),
                         parts[idx + 3].parse::<u8>(),
                         parts[idx + 4].parse::<u8>(),
-                    ) {
-                        let color = Color::Rgb(r, g, b);
-                        if code == 38 {
-                            *style = style.fg(color);
-                        } else {
-                            *style = style.bg(color);
-                        }
-                        idx += 4;
+                    )
+                {
+                    let color = Color::Rgb(r, g, b);
+                    if code == 38 {
+                        *style = style.fg(color);
+                    } else {
+                        *style = style.bg(color);
                     }
+                    idx += 4;
                 }
             }
             _ => {}

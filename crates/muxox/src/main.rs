@@ -7,16 +7,11 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 
-mod app;
-mod config;
 mod modes;
-mod signal;
-mod utils;
-mod web_ui;
-mod ws_proto;
 
-use config::load_config;
-use modes::{raw::run_raw_mode, tui::run_tui_mode, web::run_web_mode};
+use modes::{raw::run_raw_mode, tui::run_tui_mode};
+use muxox_core::config::load_config;
+use muxox_web::run_web_mode;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run multiple dev servers with a simple TUI.")]
@@ -37,7 +32,10 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    muxox_core::log::init();
     let cli = Cli::parse();
+    let mode = if cli.raw { "raw" } else if cli.tui { "tui" } else { "web" };
+    muxox_core::log::debug(&format!("starting mode={mode}"));
     let cfg = load_config(cli.config.as_deref())?;
 
     if cli.raw {

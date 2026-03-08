@@ -1,0 +1,10 @@
+[package]
+name = "tui-bridge"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dioxus-core = "0.7"
+ratatui = "0.28"
+crossterm = "0.28"
+anyhow = "1"

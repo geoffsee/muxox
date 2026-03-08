@@ -1,0 +1,18 @@
+[[service]]
+name = "test-stdin"
+cmd = "./test-stdin.sh"
+cwd = "./example"
+log_capacity = 250
+interactive = true
+
+[[service]]
+name = "example-service-1"
+cmd = "bun ./index.ts"
+cwd = "example/packages/example-service-1"
+log_capacity = 5000
+
+[[service]]
+name = "example-service-2"
+cmd = "bun ./index.ts"
+cwd = "example/packages/example-service-2"
+log_capacity = 5000

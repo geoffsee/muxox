@@ -2,10 +2,10 @@
 // Copyright (c) 2025 Geoff Seemueller
 // This file is part of muxox, released under the MIT License.
 
-use crate::app::{App, AppMsg, ServiceState, Status, kill_all, start_service};
-use crate::config::Config;
-use crate::signal::signal_watcher;
 use anyhow::Result;
+use muxox_core::app::{App, AppMsg, ServiceState, Status, kill_all, start_service};
+use muxox_core::config::Config;
+use muxox_core::signal::signal_watcher;
 use tokio::sync::mpsc;
 use tokio::task;
 

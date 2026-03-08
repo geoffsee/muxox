@@ -46,7 +46,7 @@ pub fn load_config(provided: Option<&Path>) -> Result<Config> {
     for path in candidates {
         if path.exists() {
             let data = fs::read_to_string(&path)?;
-            return Ok(toml::from_str(&data).with_context(|| format!("parsing {path:?}"))?);
+            return toml::from_str(&data).with_context(|| format!("parsing {path:?}"));
         }
     }
     anyhow::bail!("No config found; create muxox.toml or pass --config <path>")

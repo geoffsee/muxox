@@ -34,7 +34,7 @@ impl WsOutbound {
     /// Encode as a binary WebSocket frame (JSON bytes).
     pub fn to_message(&self) -> Message {
         let bytes = serde_json::to_vec(self).expect("WsOutbound serialization cannot fail");
-        Message::Binary(bytes.into())
+        Message::Binary(bytes)
     }
 }
 

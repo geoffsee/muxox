@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/muxox"
+    "crates/muxox",
+    "crates/muxox-core",
+    "crates/muxox-web",
+    "crates/tui-bridge",
 ]
 default-members = ["crates/muxox"]

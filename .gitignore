@@ -1,16 +1,51 @@
-*
-!crates/
-!crates/**
-!.gitignore
-!Cargo.toml
-!Cargo.lock
-!muxox.toml
-!README.md
-!example/
-!example/**
-!npm/
-!npm/**
-!scripts/
-!scripts/**
-!workflows
-!muxox.png
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock # Keep for binary projects, ignore for libraries
+
+# Node/NPM
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+.npm
+.yarn
+dist/
+build/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-*
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Development
+*.log
+.env
+.env.local
+.env.*.local
+*.tmp
+*.temp
+.cache/
+.idea
+references
+prompt.md
+todo
+embeddings.json
+.jun??/

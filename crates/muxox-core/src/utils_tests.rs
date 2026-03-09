@@ -80,10 +80,12 @@ mod tests {
     #[test]
     fn underline_modifier() {
         let line = ansi_to_line("\x1b[4munderlined");
-        assert!(line.spans[0]
-            .style
-            .add_modifier
-            .contains(Modifier::UNDERLINED));
+        assert!(
+            line.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::UNDERLINED)
+        );
     }
 
     #[test]

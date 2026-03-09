@@ -7,3 +7,16 @@ members = [
     "crates/tui-bridge",
 ]
 default-members = ["crates/muxox"]
+
+[workspace.package]
+version = "1.1.0"
+edition = "2024"
+authors = ["Geoff Seemueller <geoff@seemueller.io>"]
+license = "MIT"
+repository = "https://github.com/geoffsee/muxox"
+homepage = "https://github.com/geoffsee/muxox"
+
+[workspace.dependencies]
+muxox-core = { version = "1.1.0", path = "crates/muxox-core" }
+muxox-web = { version = "1.1.0", path = "crates/muxox-web" }
+tui-bridge = { version = "1.1.0", path = "crates/tui-bridge" }

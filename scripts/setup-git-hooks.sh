@@ -10,21 +10,24 @@ echo "Installing pre-commit hook..."
 
 cat > "$HOOK_DIR/pre-commit" << 'EOF'
 #!/bin/bash
-set -e
 
 echo "Running pre-commit checks..."
 
 echo "Checking formatting..."
-cargo fmt --all -- --check
-if [ $? -ne 0 ]; then
+if ! cargo fmt --all -- --check; then
     echo "Formatting check failed. Run 'cargo fmt --all' to fix."
     exit 1
 fi
 
 echo "Running clippy..."
-cargo clippy --all-targets --all-features -- -D warnings
-if [ $? -ne 0 ]; then
+if ! cargo clippy --all-targets --all-features -- -D warnings; then
     echo "Clippy check failed. Fix the warnings above."
+    exit 1
+fi
+
+echo "Running tests..."
+if ! cargo test --workspace --all-features; then
+    echo "Tests failed. Fix the failures above."
     exit 1
 fi
 

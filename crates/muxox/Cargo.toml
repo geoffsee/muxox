@@ -1,21 +1,21 @@
 [package]
 name = "muxox"
-version = "1.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
 description = "A terminal-based service orchestrator and process multiplexer for development workflows"
-authors = ["Geoff Seemueller <geoff@seemueller.io>"]
-license = "MIT"
-repository = "https://github.com/geoffsee/muxox"
-homepage = "https://github.com/geoffsee/muxox"
 documentation = "https://github.com/geoffsee/muxox"
 readme = "../../README.md"
 keywords = ["terminal", "tui", "multiplexer", "development", "process-manager"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-muxox-core = { path = "../muxox-core" }
-muxox-web = { path = "../muxox-web" }
-tui-bridge = { path = "../tui-bridge" }
+muxox-core.workspace = true
+muxox-web.workspace = true
+tui-bridge.workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dioxus-core = "0.7"

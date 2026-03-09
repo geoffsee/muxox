@@ -34,7 +34,13 @@ struct Cli {
 async fn main() -> Result<()> {
     muxox_core::log::init();
     let cli = Cli::parse();
-    let mode = if cli.raw { "raw" } else if cli.tui { "tui" } else { "web" };
+    let mode = if cli.raw {
+        "raw"
+    } else if cli.tui {
+        "tui"
+    } else {
+        "web"
+    };
     muxox_core::log::debug(&format!("starting mode={mode}"));
     let cfg = load_config(cli.config.as_deref())?;
 

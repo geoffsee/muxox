@@ -46,10 +46,7 @@ fn navigate_down_increments_selected() {
 
 #[test]
 fn navigate_up_decrements_selected() {
-    let mut app = test_app(vec![
-        test_cfg("a", false),
-        test_cfg("b", false),
-    ]);
+    let mut app = test_app(vec![test_cfg("a", false), test_cfg("b", false)]);
     app.selected = 1;
     app.selected = app.selected.saturating_sub(1);
     assert_eq!(app.selected, 0);
@@ -61,10 +58,7 @@ fn navigate_up_decrements_selected() {
 
 #[test]
 fn changing_selection_resets_scroll() {
-    let mut app = test_app(vec![
-        test_cfg("a", false),
-        test_cfg("b", false),
-    ]);
+    let mut app = test_app(vec![test_cfg("a", false), test_cfg("b", false)]);
     app.log_offset_from_end = 5;
 
     // Simulates what handle_key does on Down

@@ -19,7 +19,10 @@ mod tests {
     fn test_app(names: &[&str]) -> App {
         let (tx, _rx) = mpsc::unbounded_channel();
         App {
-            services: names.iter().map(|n| ServiceState::new(test_cfg(n))).collect(),
+            services: names
+                .iter()
+                .map(|n| ServiceState::new(test_cfg(n)))
+                .collect(),
             selected: 0,
             log_offset_from_end: 0,
             tx,

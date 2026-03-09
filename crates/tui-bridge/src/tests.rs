@@ -2,14 +2,14 @@
 mod tests {
     use crate::render::render_view;
     use crate::view::*;
+    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::layout::Constraint;
     use ratatui::style::Color;
-    use ratatui::Terminal;
 
+    use dioxus_core::{Element, NoOpMutations, ScopeId, VNode, VirtualDom};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
-    use dioxus_core::{Element, NoOpMutations, ScopeId, VNode, VirtualDom};
 
     // --- Dioxus mark_dirty + render_immediate verification ---
 
@@ -90,7 +90,8 @@ mod tests {
     #[test]
     fn empty_node_renders_without_panic() {
         let mut term = test_terminal(40, 10);
-        term.draw(|f| render_view(f, f.area(), &ViewNode::Empty)).unwrap();
+        term.draw(|f| render_view(f, f.area(), &ViewNode::Empty))
+            .unwrap();
     }
 
     #[test]
@@ -105,7 +106,10 @@ mod tests {
         let buf = term.backend().buffer().clone();
         let text: String = buf.content.iter().map(|c| c.symbol()).collect();
         assert!(text.contains("Title"), "buffer should contain the title");
-        assert!(text.contains("hello world"), "buffer should contain the content");
+        assert!(
+            text.contains("hello world"),
+            "buffer should contain the content"
+        );
     }
 
     #[test]
@@ -298,9 +302,21 @@ mod tests {
         let mut term = test_terminal(40, 10);
         let node = ViewNode::Row(RowNode {
             children: vec![
-                ViewNode::Text(TextNode { title: "A".into(), lines: vec![], scroll: 0 }),
-                ViewNode::Text(TextNode { title: "B".into(), lines: vec![], scroll: 0 }),
-                ViewNode::Text(TextNode { title: "C".into(), lines: vec![], scroll: 0 }),
+                ViewNode::Text(TextNode {
+                    title: "A".into(),
+                    lines: vec![],
+                    scroll: 0,
+                }),
+                ViewNode::Text(TextNode {
+                    title: "B".into(),
+                    lines: vec![],
+                    scroll: 0,
+                }),
+                ViewNode::Text(TextNode {
+                    title: "C".into(),
+                    lines: vec![],
+                    scroll: 0,
+                }),
             ],
             constraints: vec![Constraint::Percentage(50), Constraint::Percentage(50)],
         });

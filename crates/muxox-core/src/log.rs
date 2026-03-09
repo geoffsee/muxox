@@ -1,7 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::sync::OnceLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();

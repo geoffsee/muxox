@@ -68,7 +68,11 @@ mod tests {
         let msg = Message::Text(json.into());
         let cmd = WsInbound::from_message(msg).unwrap();
         match cmd {
-            WsInbound::Command { idx, command, input } => {
+            WsInbound::Command {
+                idx,
+                command,
+                input,
+            } => {
                 assert_eq!(idx, 1);
                 assert_eq!(command, "start");
                 assert!(input.is_none());
@@ -95,7 +99,11 @@ mod tests {
         let msg = Message::Text(json.into());
         let cmd = WsInbound::from_message(msg).unwrap();
         match cmd {
-            WsInbound::Command { idx, command, input } => {
+            WsInbound::Command {
+                idx,
+                command,
+                input,
+            } => {
                 assert_eq!(idx, 0);
                 assert_eq!(command, "stdin");
                 assert_eq!(input.unwrap(), "hello\n");

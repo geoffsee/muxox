@@ -94,7 +94,10 @@ pub fn start_service(idx: usize, app: &mut App) {
     if matches!(app.services[idx].status, Status::Running | Status::Starting) {
         return;
     }
-    crate::log::debug(&format!("start_service idx={} name={}", idx, app.services[idx].cfg.name));
+    crate::log::debug(&format!(
+        "start_service idx={} name={}",
+        idx, app.services[idx].cfg.name
+    ));
     app.services[idx].status = Status::Starting;
     let tx = app.tx.clone();
     let sc = app.services[idx].cfg.clone();

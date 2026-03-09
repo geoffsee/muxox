@@ -110,7 +110,11 @@ pub(crate) fn tui_root() -> Element {
         });
         ViewNode::Column(ColumnNode {
             children: vec![main, input_bar, help],
-            constraints: vec![Constraint::Min(1), Constraint::Length(3), Constraint::Length(1)],
+            constraints: vec![
+                Constraint::Min(1),
+                Constraint::Length(3),
+                Constraint::Length(1),
+            ],
         })
     } else {
         ViewNode::Column(ColumnNode {
@@ -183,10 +187,11 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
 
             loop {
                 loop_count += 1;
-                if loop_count <= 20 || loop_count % 100 == 0 {
+                if loop_count <= 20 || loop_count.is_multiple_of(100) {
                     let app = app_ref.borrow();
                     let log_lens: Vec<usize> = app.services.iter().map(|s| s.log.len()).collect();
-                    let statuses: Vec<&str> = app.services.iter().map(|s| s.status.as_str()).collect();
+                    let statuses: Vec<&str> =
+                        app.services.iter().map(|s| s.status.as_str()).collect();
                     debug(&format!(
                         "loop #{loop_count} statuses={statuses:?} log_lens={log_lens:?}"
                     ));
@@ -205,7 +210,9 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
                 // 3. Handle terminal input
                 let timeout = tick_rate.saturating_sub(last_tick.elapsed());
                 if loop_count <= 5 {
-                    debug(&format!("loop #{loop_count} polling with timeout={timeout:?}"));
+                    debug(&format!(
+                        "loop #{loop_count} polling with timeout={timeout:?}"
+                    ));
                 }
                 let poll_result = event::poll(timeout);
                 if loop_count <= 5 {
@@ -246,7 +253,7 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
                     }
                     apply_msg(&mut app_ref.borrow_mut(), msg);
                 }
-                if drained > 0 && (loop_count <= 20 || loop_count % 100 == 0) {
+                if drained > 0 && (loop_count <= 20 || loop_count.is_multiple_of(100)) {
                     debug(&format!("loop #{loop_count} drained {drained} messages"));
                 }
             }

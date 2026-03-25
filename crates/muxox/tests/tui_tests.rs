@@ -11,6 +11,7 @@ fn test_cfg(name: &str, interactive: bool) -> ServiceCfg {
         log_capacity: 100,
         interactive,
         pty: false,
+        env_file: None,
     }
 }
 

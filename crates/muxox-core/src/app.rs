@@ -152,6 +152,21 @@ pub fn start_service(idx: usize, app: &mut App) {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // Apply service-scoped environment variables from .env file
+        if let Some(ref env_path) = sc.env_file {
+            match crate::config::parse_env_file(env_path) {
+                Ok(vars) => {
+                    cmd.envs(vars);
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMsg::Log(
+                        idx,
+                        format!("[ERROR] Failed to load env file: {e}"),
+                    ));
+                }
+            }
+        }
+
         // Interactive services need stdin piped so we can send input
         if sc.interactive {
             cmd.stdin(Stdio::piped());
@@ -334,6 +349,7 @@ mod tests {
             log_capacity: 10,
             interactive: false,
             pty: false,
+            env_file: None,
         });
 
         assert_eq!(state.status, Status::Stopped);

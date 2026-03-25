@@ -17,6 +17,7 @@ pty = true
 name = "example-service-1"
 cmd = "bun ./index.ts"
 cwd = "packages/example-service-1"
+env_file = "packages/example-service-1/.env.example"
 log_capacity = 5000
 
 [[service]]

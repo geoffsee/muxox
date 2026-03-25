@@ -1,4 +1,4 @@
-.PHONY: all build test lint run run-tui run-raw fmt clean help
+.PHONY: all build test lint run run-tui run-raw demo fmt clean help
 
 # Default target
 all: build
@@ -20,6 +20,9 @@ run-tui: ## Run-tui: Run muxox in TUI mode
 
 run-raw: ## Run-raw: Run muxox in raw (non-interactive) mode
 	./scripts/run-example.sh --raw
+
+demo: ## Demo: Run the example config in TUI mode (showcases env_file, interactive, etc.)
+	./scripts/run-example.sh --tui
 
 fmt: ## Fmt: Run cargo fmt --all
 	cargo fmt --all

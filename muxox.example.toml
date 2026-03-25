@@ -10,6 +10,7 @@ name = "example-service-1"
 cmd = "bun ./index.ts"
 cwd = "example/packages/example-service-1"
 log_capacity = 5000
+env_file = "example/packages/example-service-1/.env.example"
 
 [[service]]
 name = "example-service-2"

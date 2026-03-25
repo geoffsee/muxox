@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -26,10 +27,43 @@ pub struct ServiceCfg {
     /// Whether to allocate a PTY for this interactive service (Unix only)
     #[serde(default)]
     pub pty: bool,
+    /// Path to a .env file whose KEY=VALUE pairs are injected into the
+    /// service's environment.  Relative paths resolve from the process CWD.
+    #[serde(default)]
+    pub env_file: Option<PathBuf>,
 }
 
 fn default_log_capacity() -> usize {
     2000
+}
+
+/// Parse a `.env` file into key-value pairs.
+///
+/// Supports `KEY=VALUE`, optional quoting (`"` or `'`), comments (`#`),
+/// and blank lines.  Does **not** modify the current process environment.
+pub fn parse_env_file(path: &Path) -> Result<HashMap<String, String>> {
+    let data = fs::read_to_string(path).with_context(|| format!("reading env file {path:?}"))?;
+    let mut map = HashMap::new();
+    for line in data.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((key, val)) = trimmed.split_once('=') {
+            let key = key.trim().to_string();
+            let val = val.trim();
+            // Strip matching outer quotes
+            let val = if (val.starts_with('"') && val.ends_with('"'))
+                || (val.starts_with('\'') && val.ends_with('\''))
+            {
+                val[1..val.len() - 1].to_string()
+            } else {
+                val.to_string()
+            };
+            map.insert(key, val);
+        }
+    }
+    Ok(map)
 }
 
 pub fn load_config(provided: Option<&Path>) -> Result<Config> {
@@ -84,6 +118,58 @@ mod tests {
         "#;
         let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
         assert_eq!(cfg.log_capacity, 2000);
+    }
+
+    #[test]
+    fn test_service_cfg_env_file() {
+        let toml_input = r#"
+            name = "with-env"
+            cmd = "echo hi"
+            env_file = ".env.local"
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.env_file, Some(PathBuf::from(".env.local")));
+    }
+
+    #[test]
+    fn test_service_cfg_env_file_defaults_to_none() {
+        let toml_input = r#"
+            name = "no-env"
+            cmd = "echo hi"
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.env_file, None);
+    }
+
+    #[test]
+    fn test_parse_env_file() {
+        let dir = std::env::temp_dir().join("muxox_test_env");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(".env.test");
+        std::fs::write(
+            &path,
+            r#"
+# database
+DB_HOST=localhost
+DB_PORT=5432
+SECRET="my secret"
+SINGLE='quoted'
+
+# blank lines and comments are skipped
+API_KEY=abc123
+"#,
+        )
+        .unwrap();
+
+        let vars = parse_env_file(&path).unwrap();
+        assert_eq!(vars["DB_HOST"], "localhost");
+        assert_eq!(vars["DB_PORT"], "5432");
+        assert_eq!(vars["SECRET"], "my secret");
+        assert_eq!(vars["SINGLE"], "quoted");
+        assert_eq!(vars["API_KEY"], "abc123");
+        assert_eq!(vars.len(), 5);
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

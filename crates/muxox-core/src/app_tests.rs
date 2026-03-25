@@ -14,6 +14,7 @@ mod tests {
             log_capacity: 100,
             interactive: false,
             pty: false,
+            env_file: None,
         }
     }
 
@@ -83,6 +84,7 @@ mod tests {
                 log_capacity: 3,
                 interactive: false,
                 pty: false,
+                env_file: None,
             })],
             selected: 0,
             log_offset_from_end: 0,

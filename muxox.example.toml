@@ -17,3 +17,15 @@ name = "example-service-2"
 cmd = "bun ./index.ts"
 cwd = "example/packages/example-service-2"
 log_capacity = 5000
+
+# Isolation example – opt-in per-service sandboxing.
+# All flags default to false.  Enable only what you need.
+#
+# process    = true  # session isolation (setsid on Unix, Job Object on Windows)
+# filesystem = true  # restrict writes to the service cwd (macOS sandbox / Linux namespaces)
+# network    = true  # deny outbound network access (macOS sandbox / Linux namespaces)
+[[service]]
+name = "sandboxed-worker"
+cmd = "node worker.js"
+cwd = "example/packages/worker"
+isolation = { process = true, filesystem = true, network = true }

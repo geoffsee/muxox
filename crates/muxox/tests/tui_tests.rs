@@ -12,6 +12,7 @@ fn test_cfg(name: &str, interactive: bool) -> ServiceCfg {
         interactive,
         pty: false,
         env_file: None,
+        isolation: Default::default(),
     }
 }
 

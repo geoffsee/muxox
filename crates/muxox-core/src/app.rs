@@ -179,6 +179,7 @@ pub fn start_service(idx: usize, app: &mut App) {
             Ok(mut child) => {
                 let pid = child.id().unwrap_or_default();
                 crate::log::debug(&format!("[task idx={idx}] spawned pid={pid}"));
+                isolation.post_spawn(pid, &sc);
                 let _ = tx.send(AppMsg::Started(idx));
 
                 // Send the child handle back to be stored
@@ -350,6 +351,7 @@ mod tests {
             interactive: false,
             pty: false,
             env_file: None,
+            isolation: Default::default(),
         });
 
         assert_eq!(state.status, Status::Stopped);

@@ -78,10 +78,35 @@ Each service supports:
 - interactive: Whether the service requires stdin (optional, default: false)
 - pty: Whether to allocate a PTY for the service (Unix only, optional, default: false)
 - log_capacity: How many log lines to keep in memory (optional, default 2000)
+- env_file: Path to a `.env` file whose KEY=VALUE pairs are injected into the service's environment (optional)
+- isolation: Per-service sandboxing settings (optional, see below)
 
 Tips:
 - Use cwd to run commands from anywhere.
 - Pick log_capacity large enough to cover your typical debugging session, but not so large that it eats RAM.
+
+### Isolation
+
+Opt-in per-service sandboxing. All flags default to `false`.
+
+```toml
+[[service]]
+name = "sandboxed-worker"
+cmd = "node worker.js"
+cwd = "./packages/worker"
+isolation = { process = true, filesystem = true, network = true }
+```
+
+| Flag | Description | macOS | Linux | Windows |
+|------|-------------|-------|-------|---------|
+| `process` | Session-level process isolation | `setsid` | `setsid` | Job Object (`KILL_ON_JOB_CLOSE`) |
+| `filesystem` | Restrict writes to service cwd | `sandbox_init` (SBPL) | User + mount namespace (`unshare`) | Not yet supported |
+| `network` | Deny outbound network access | `sandbox_init` (SBPL) | User + network namespace (`unshare`) | Not yet supported |
+
+Notes:
+- Linux namespace isolation requires unprivileged user namespaces to be enabled (`sysctl kernel.unprivileged_userns_clone=1`).
+- macOS filesystem isolation allows writes to the service cwd, `/tmp`, and `/dev`.
+- When an isolation flag is requested but not supported on the current platform, the service will either fail to start (Unix) or log a warning and continue (Windows).
 
 ## Troubleshooting
 - Not working on platform X
@@ -130,7 +155,7 @@ The `scripts/` directory contains:
 
 ## Requirements
 
-- Unix-like OS (Linux, macOS)
+- Linux, macOS, or Windows
 - A terminal with true color support
 - All commands referenced in your config must be available in PATH
 

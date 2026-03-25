@@ -526,6 +526,49 @@ mod tests {
         assert_send_sync::<ProcessGroup>();
     }
 
+    #[test]
+    fn post_spawn_default_is_noop() {
+        // ProcessGroup does not override post_spawn; calling it must not panic.
+        let pg = ProcessGroup;
+        let cfg = crate::config::ServiceCfg {
+            name: "test".into(),
+            cmd: "true".into(),
+            cwd: None,
+            log_capacity: 10,
+            interactive: false,
+            pty: false,
+            env_file: None,
+            isolation: IsolationCfg::default(),
+        };
+        pg.post_spawn(12345, &cfg); // should be a no-op
+    }
+
+    #[test]
+    fn isolation_cfg_partial_equality() {
+        let a = IsolationCfg {
+            process: true,
+            filesystem: false,
+            network: true,
+        };
+        let b = IsolationCfg {
+            process: true,
+            filesystem: false,
+            network: true,
+        };
+        let c = IsolationCfg::default();
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_sandbox_profile_neither() {
+        let profile = build_macos_sandbox_profile(false, false, std::path::Path::new("/tmp/test"));
+        assert!(profile.contains("(allow default)"));
+        assert!(!profile.contains("(deny file-write*)"));
+        assert!(!profile.contains("(deny network*)"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_sandbox_profile_network_only() {

@@ -77,6 +77,53 @@ fn test_process_creation() {
     }
 }
 
+// Test that the default isolation strategy is Sandbox
+#[test]
+fn test_default_isolation_is_sandbox() {
+    let iso = muxox_core::isolation::default_isolation();
+    let debug = format!("{:?}", iso);
+    assert!(
+        debug.contains("Sandbox"),
+        "Expected default isolation to be Sandbox, got: {debug}"
+    );
+}
+
+// Test that IsolationCfg defaults to no isolation
+#[test]
+fn test_isolation_cfg_defaults() {
+    let cfg: muxox_core::config::IsolationCfg = Default::default();
+    assert!(!cfg.process, "process should default to false");
+    assert!(!cfg.filesystem, "filesystem should default to false");
+    assert!(!cfg.network, "network should default to false");
+}
+
+// Test config parsing with isolation section
+#[test]
+fn test_config_with_isolation() {
+    let toml_input = r#"
+        [[service]]
+        name = "isolated"
+        cmd = "echo sandbox"
+        isolation.process = true
+        isolation.network = true
+
+        [[service]]
+        name = "normal"
+        cmd = "echo normal"
+    "#;
+    let cfg: muxox_core::config::Config = toml::from_str(toml_input).unwrap();
+    assert_eq!(cfg.service.len(), 2);
+
+    assert!(cfg.service[0].isolation.process);
+    assert!(!cfg.service[0].isolation.filesystem);
+    assert!(cfg.service[0].isolation.network);
+
+    // Second service has no isolation
+    assert!(!cfg.service[1].isolation.process);
+    assert!(!cfg.service[1].isolation.filesystem);
+    assert!(!cfg.service[1].isolation.network);
+}
+
 // Test for the environment-dependent features
 #[test]
 fn test_environment_detection() {

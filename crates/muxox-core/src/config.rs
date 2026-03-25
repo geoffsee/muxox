@@ -31,10 +31,28 @@ pub struct ServiceCfg {
     /// service's environment.  Relative paths resolve from the process CWD.
     #[serde(default)]
     pub env_file: Option<PathBuf>,
+    /// Optional isolation / sandboxing settings for this service.
+    #[serde(default)]
+    pub isolation: IsolationCfg,
 }
 
 fn default_log_capacity() -> usize {
     2000
+}
+
+/// Per-service isolation settings.  All flags default to `false`
+/// (no isolation beyond the standard process group).
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct IsolationCfg {
+    /// Session-level process isolation (`setsid` on Unix, Job Object on Windows).
+    #[serde(default)]
+    pub process: bool,
+    /// Restrict filesystem writes to the service working directory.
+    #[serde(default)]
+    pub filesystem: bool,
+    /// Deny all outbound network access.
+    #[serde(default)]
+    pub network: bool,
 }
 
 /// Parse a `.env` file into key-value pairs.
@@ -170,6 +188,61 @@ API_KEY=abc123
         assert_eq!(vars.len(), 5);
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_isolation_cfg_defaults_to_all_false() {
+        let toml_input = r#"
+            name = "svc"
+            cmd = "echo hi"
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.isolation, IsolationCfg::default());
+        assert!(!cfg.isolation.process);
+        assert!(!cfg.isolation.filesystem);
+        assert!(!cfg.isolation.network);
+    }
+
+    #[test]
+    fn test_isolation_cfg_partial() {
+        let toml_input = r#"
+            name = "svc"
+            cmd = "echo hi"
+            isolation.network = true
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert!(!cfg.isolation.process);
+        assert!(!cfg.isolation.filesystem);
+        assert!(cfg.isolation.network);
+    }
+
+    #[test]
+    fn test_isolation_cfg_all_enabled() {
+        let toml_input = r#"
+            name = "svc"
+            cmd = "echo hi"
+            [isolation]
+            process = true
+            filesystem = true
+            network = true
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert!(cfg.isolation.process);
+        assert!(cfg.isolation.filesystem);
+        assert!(cfg.isolation.network);
+    }
+
+    #[test]
+    fn test_isolation_cfg_inline_table() {
+        let toml_input = r#"
+            name = "svc"
+            cmd = "echo hi"
+            isolation = { process = true, filesystem = false, network = true }
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert!(cfg.isolation.process);
+        assert!(!cfg.isolation.filesystem);
+        assert!(cfg.isolation.network);
     }
 
     #[test]

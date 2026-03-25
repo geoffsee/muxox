@@ -15,6 +15,7 @@ mod tests {
             interactive: false,
             pty: false,
             env_file: None,
+            isolation: Default::default(),
         }
     }
 
@@ -85,6 +86,7 @@ mod tests {
                 interactive: false,
                 pty: false,
                 env_file: None,
+                isolation: Default::default(),
             })],
             selected: 0,
             log_offset_from_end: 0,

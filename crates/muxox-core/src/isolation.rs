@@ -323,7 +323,7 @@ mod win_job {
         peak_job_memory_used: usize,
     }
 
-    extern "system" {
+    unsafe extern "system" {
         fn CreateJobObjectW(attributes: *const c_void, name: *const u16) -> HANDLE;
         fn SetInformationJobObject(
             job: HANDLE,
@@ -371,8 +371,6 @@ mod win_job {
 #[cfg(windows)]
 impl Isolation for Sandbox {
     fn prepare(&self, cmd: &mut AsyncCommand, cfg: &ServiceCfg) {
-        use std::os::windows::process::CommandExt;
-
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         const CREATE_NEW_CONSOLE: u32 = 0x00000010;
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE);
@@ -467,7 +465,6 @@ impl Isolation for ProcessGroup {
 #[cfg(windows)]
 impl Isolation for ProcessGroup {
     fn prepare(&self, cmd: &mut AsyncCommand, _cfg: &ServiceCfg) {
-        use std::os::windows::process::CommandExt;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
         const CREATE_NEW_CONSOLE: u32 = 0x00000010;
         cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE);

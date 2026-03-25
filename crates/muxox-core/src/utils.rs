@@ -5,7 +5,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::fs::OpenOptions;
-use tokio::process::Command as AsyncCommand;
 
 pub fn debug_file_log(msg: &str) {
     if let Ok(path) = std::env::var("MUXOX_DEBUG_FILE")
@@ -14,24 +13,6 @@ pub fn debug_file_log(msg: &str) {
         use std::io::Write as _;
         let _ = writeln!(f, "[{:?}] {}", std::thread::current().id(), msg);
     }
-}
-
-#[cfg(unix)]
-pub fn set_process_group(cmd: &mut AsyncCommand) {
-    unsafe {
-        cmd.pre_exec(|| {
-            let _ =
-                nix::unistd::setpgid(nix::unistd::Pid::from_raw(0), nix::unistd::Pid::from_raw(0));
-            Ok(())
-        });
-    }
-}
-
-#[cfg(windows)]
-pub fn set_process_group(cmd: &mut AsyncCommand) {
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-    const CREATE_NEW_CONSOLE: u32 = 0x00000010; // better isolation for signals
-    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE);
 }
 
 #[cfg(unix)]

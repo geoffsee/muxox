@@ -19,6 +19,7 @@ use muxox_core::app::{
     App, AppMsg, ServiceState, apply_msg, kill_all, start_service, stop_service,
 };
 use muxox_core::config::Config;
+use muxox_core::isolation::default_isolation;
 use muxox_core::signal::signal_watcher;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -36,6 +37,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
         tx: tx.clone(),
         input_mode: false,
         input_buffer: String::new(),
+        isolation: default_isolation(),
     }));
 
     // Start all services

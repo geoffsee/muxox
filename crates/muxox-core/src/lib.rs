@@ -1,5 +1,6 @@
 pub mod app;
 pub mod config;
+pub mod isolation;
 pub mod log;
 pub mod signal;
 pub mod utils;

@@ -6,6 +6,7 @@ use muxox_core::app::{
     App, AppMsg, ServiceState, Status, apply_msg, cleanup_and_exit, start_service, stop_service,
 };
 use muxox_core::config::Config;
+use muxox_core::isolation::default_isolation;
 use muxox_core::log::debug;
 use muxox_core::signal::signal_watcher;
 use muxox_core::utils::ansi_to_line;
@@ -151,6 +152,7 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
                 tx: tx.clone(),
                 input_mode: false,
                 input_buffer: String::new(),
+                isolation: default_isolation(),
             };
 
             // Signal watcher (spawns on the tokio runtime, not the LocalSet)

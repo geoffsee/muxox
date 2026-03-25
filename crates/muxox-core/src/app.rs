@@ -3,12 +3,13 @@
 // This file is part of muxox, released under the MIT License.
 
 use crate::config::ServiceCfg;
+use crate::isolation::Isolation;
 #[cfg(unix)]
 use crate::utils::{interactive_args, interactive_program};
-use crate::utils::{set_process_group, shell_exec, shell_flag, shell_program};
+use crate::utils::{shell_exec, shell_flag, shell_program};
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -66,7 +67,6 @@ impl ServiceState {
     }
 }
 
-#[derive(Debug)]
 pub struct App {
     pub services: Vec<ServiceState>,
     pub selected: usize,
@@ -77,6 +77,20 @@ pub struct App {
     // Input mode for interactive services
     pub input_mode: bool,
     pub input_buffer: String,
+    pub isolation: Arc<dyn Isolation>,
+}
+
+impl std::fmt::Debug for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("services", &self.services)
+            .field("selected", &self.selected)
+            .field("log_offset_from_end", &self.log_offset_from_end)
+            .field("input_mode", &self.input_mode)
+            .field("input_buffer", &self.input_buffer)
+            .field("isolation", &self.isolation)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +115,7 @@ pub fn start_service(idx: usize, app: &mut App) {
     app.services[idx].status = Status::Starting;
     let tx = app.tx.clone();
     let sc = app.services[idx].cfg.clone();
+    let isolation = app.isolation.clone();
 
     task::spawn(async move {
         // Build command; optionally wrap interactive with a PTY when requested
@@ -142,7 +157,7 @@ pub fn start_service(idx: usize, app: &mut App) {
             cmd.stdin(Stdio::piped());
         }
 
-        set_process_group(&mut cmd);
+        isolation.prepare(&mut cmd, &sc);
 
         crate::log::debug(&format!("[task idx={idx}] spawning command: {:?}", sc.cmd));
         match cmd.spawn() {
@@ -284,48 +299,16 @@ pub fn kill_all(app: &mut App) {
     }
 }
 
-#[cfg(unix)]
 pub fn kill_tree(idx: usize, app: &mut App) {
-    use nix::sys::signal::{Signal, killpg};
-    use nix::unistd::Pid;
     let name = app.services[idx].cfg.name.clone();
 
     if let Some(pid) = app.services[idx].pid {
-        // Kill the specific process group using the stored PID
-        let pgid = Pid::from_raw(pid as i32);
-
-        // First try TERM signal to allow graceful shutdown
-        if killpg(pgid, Signal::SIGTERM).is_err() {
-            // If killpg fails (process group doesn't exist), try killing the process directly
-            let _ = nix::sys::signal::kill(pgid, Signal::SIGTERM);
-        }
-
-        // Wait a bit for graceful shutdown
-        std::thread::sleep(Duration::from_millis(250));
-
-        // Then force kill if still running
-        if killpg(pgid, Signal::SIGKILL).is_err() {
-            // If killpg fails, try killing the process directly
-            let _ = nix::sys::signal::kill(pgid, Signal::SIGKILL);
-        }
-
+        app.isolation.terminate(pid);
         app.services[idx].push_log(format!("[killed {name} (PID {pid})]"));
     } else {
-        // Fallback to pattern matching if no PID is stored
-        let _ = Command::new("pkill").arg("-f").arg(&name).status();
+        app.isolation.terminate_by_name(&name);
         app.services[idx].push_log(format!("[killed {name}]"));
     }
-}
-
-#[cfg(not(unix))]
-pub fn kill_tree(idx: usize, app: &mut App) {
-    let name = app.services[idx].cfg.name.clone();
-    // Use taskkill to nuke the subtree
-    let _ = Command::new("taskkill")
-        .args(["/F", "/T", "/FI"])
-        .arg(format!("WINDOWTITLE eq {}", name))
-        .status();
-    app.services[idx].push_log(format!("[killed {name}]"));
 }
 
 pub fn cleanup_and_exit(app: &mut App) {

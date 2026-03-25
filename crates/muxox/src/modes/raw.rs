@@ -5,6 +5,7 @@
 use anyhow::Result;
 use muxox_core::app::{App, AppMsg, ServiceState, Status, kill_all, start_service};
 use muxox_core::config::Config;
+use muxox_core::isolation::default_isolation;
 use muxox_core::signal::signal_watcher;
 use tokio::sync::mpsc;
 use tokio::task;
@@ -18,6 +19,7 @@ pub async fn run_raw_mode(cfg: Config) -> Result<()> {
         tx: tx.clone(),
         input_mode: false,
         input_buffer: String::new(),
+        isolation: default_isolation(),
     };
 
     // Signal watcher: on any exit signal, nuke children then exit.

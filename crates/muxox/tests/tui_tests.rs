@@ -1,5 +1,6 @@
 use muxox_core::app::{App, AppMsg, ServiceState, Status, apply_msg};
 use muxox_core::config::ServiceCfg;
+use muxox_core::isolation::default_isolation;
 use tokio::sync::mpsc;
 
 fn test_cfg(name: &str, interactive: bool) -> ServiceCfg {
@@ -22,6 +23,7 @@ fn test_app(cfgs: Vec<ServiceCfg>) -> App {
         tx,
         input_mode: false,
         input_buffer: String::new(),
+        isolation: default_isolation(),
     }
 }
 

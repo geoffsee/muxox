@@ -2,6 +2,7 @@
 mod tests {
     use crate::app::{App, AppMsg, ServiceState, Status, apply_msg};
     use crate::config::ServiceCfg;
+    use crate::isolation::default_isolation;
     use std::sync::Arc;
     use tokio::sync::{Mutex, mpsc};
 
@@ -28,6 +29,7 @@ mod tests {
             tx,
             input_mode: false,
             input_buffer: String::new(),
+            isolation: default_isolation(),
         }
     }
 
@@ -87,6 +89,7 @@ mod tests {
             tx,
             input_mode: false,
             input_buffer: String::new(),
+            isolation: default_isolation(),
         };
 
         for i in 0..5 {

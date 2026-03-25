@@ -3,9 +3,9 @@
 // This file is part of muxox, released under the MIT License.
 
 use crate::config::ServiceCfg;
-use crate::utils::{
-    interactive_args, interactive_program, set_process_group, shell_exec, shell_flag, shell_program,
-};
+#[cfg(unix)]
+use crate::utils::{interactive_args, interactive_program};
+use crate::utils::{set_process_group, shell_exec, shell_flag, shell_program};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::process::{Child, Command, Stdio};

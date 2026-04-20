@@ -99,7 +99,8 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
 
     let addr: SocketAddr = format!("[::1]:{}", port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    let url = format!("http://localhost:{}", port);
+    let actual_port = listener.local_addr()?.port();
+    let url = format!("http://localhost:{}", actual_port);
     println!("Web UI available at {}", url);
 
     if let Err(e) = open::that(url) {

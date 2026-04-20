@@ -25,8 +25,8 @@ struct Cli {
     /// Run in TUI mode
     #[arg(long)]
     tui: bool,
-    /// Port for the Web UI (default: 8772)
-    #[arg(short, long, default_value_t = 8772)]
+    /// Port for the Web UI (default: random available port)
+    #[arg(short, long, default_value_t = 0)]
     port: u16,
 }
 

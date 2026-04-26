@@ -1,3 +1,12 @@
+# Optional embedded MCP (Model Context Protocol) server.  When enabled, muxox
+# exposes a JSON-RPC endpoint at http://{bind}:{port}/mcp that lets MCP-aware
+# agents list services and read their captured logs.  Available in web mode
+# (default) and raw mode (`muxox --raw`).
+# [mcp]
+# enabled = true
+# port    = 0           # 0 picks a random available port
+# bind    = "127.0.0.1"
+
 [[service]]
 name = "test-stdin"
 cmd = "./test-stdin.sh"

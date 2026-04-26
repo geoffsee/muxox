@@ -90,6 +90,19 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 # network    = true
 #
 # ---------------------------------------------------------------------------
+# Optional embedded MCP (Model Context Protocol) server.
+#
+# When enabled, muxox exposes a JSON-RPC endpoint at
+# http://{bind}:{port}/mcp that lets MCP-aware agents list services and
+# read their captured logs without scraping the web UI.  Available in web
+# mode (default) and raw mode (`muxox --raw`).
+# ---------------------------------------------------------------------------
+# [mcp]
+# enabled = true       # default: false
+# port    = 0          # default: 0 (random available port)
+# bind    = "127.0.0.1"
+#
+# ---------------------------------------------------------------------------
 # Starter service -- replace with your own.
 # ---------------------------------------------------------------------------
 [[service]]

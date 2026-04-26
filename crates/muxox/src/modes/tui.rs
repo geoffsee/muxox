@@ -141,6 +141,12 @@ fn status_display(status: Status) -> (&'static str, Color) {
 // --- Entry point ---
 
 pub async fn run_tui_mode(cfg: Config) -> Result<()> {
+    if cfg.mcp.enabled {
+        eprintln!(
+            "warning: mcp.enabled is set but the MCP server is not supported in TUI mode; \
+             use web mode (default) or --raw to expose MCP."
+        );
+    }
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async move {

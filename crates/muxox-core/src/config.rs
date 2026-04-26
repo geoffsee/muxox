@@ -8,9 +8,48 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct Config {
+    #[serde(default)]
     pub service: Vec<ServiceCfg>,
+    /// Optional MCP (Model Context Protocol) server settings.  Disabled by
+    /// default; enable with `[mcp] enabled = true` to expose service status
+    /// and logs to MCP-compatible agents over HTTP.
+    #[serde(default)]
+    pub mcp: McpCfg,
+}
+
+/// Settings for the embedded MCP (Model Context Protocol) server.
+///
+/// When `enabled = true`, muxox exposes a JSON-RPC 2.0 endpoint at
+/// `http://{bind}:{port}/mcp` that lets MCP-compatible agents list services
+/// and retrieve their captured logs without scraping the web UI.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct McpCfg {
+    /// Whether to start the embedded MCP server.  Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// TCP port for the MCP server.  `0` selects a random available port
+    /// (printed to stdout at startup).  Default: `0`.
+    #[serde(default)]
+    pub port: u16,
+    /// Address to bind the MCP server to.  Default: `127.0.0.1`.
+    #[serde(default = "default_mcp_bind")]
+    pub bind: String,
+}
+
+impl Default for McpCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 0,
+            bind: default_mcp_bind(),
+        }
+    }
+}
+
+fn default_mcp_bind() -> String {
+    "127.0.0.1".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -259,5 +298,54 @@ API_KEY=abc123
         assert_eq!(cfg.service.len(), 2);
         assert_eq!(cfg.service[0].name, "svc1");
         assert_eq!(cfg.service[1].name, "svc2");
+        assert!(!cfg.mcp.enabled);
+    }
+
+    #[test]
+    fn test_mcp_cfg_defaults_to_disabled() {
+        let toml_input = r#"
+            [[service]]
+            name = "svc"
+            cmd = "run"
+        "#;
+        let cfg: Config = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.mcp, McpCfg::default());
+        assert!(!cfg.mcp.enabled);
+        assert_eq!(cfg.mcp.port, 0);
+        assert_eq!(cfg.mcp.bind, "127.0.0.1");
+    }
+
+    #[test]
+    fn test_mcp_cfg_enabled_only() {
+        let toml_input = r#"
+            [mcp]
+            enabled = true
+
+            [[service]]
+            name = "svc"
+            cmd = "run"
+        "#;
+        let cfg: Config = toml::from_str(toml_input).unwrap();
+        assert!(cfg.mcp.enabled);
+        assert_eq!(cfg.mcp.port, 0);
+        assert_eq!(cfg.mcp.bind, "127.0.0.1");
+    }
+
+    #[test]
+    fn test_mcp_cfg_full() {
+        let toml_input = r#"
+            [mcp]
+            enabled = true
+            port = 4242
+            bind = "0.0.0.0"
+
+            [[service]]
+            name = "svc"
+            cmd = "run"
+        "#;
+        let cfg: Config = toml::from_str(toml_input).unwrap();
+        assert!(cfg.mcp.enabled);
+        assert_eq!(cfg.mcp.port, 4242);
+        assert_eq!(cfg.mcp.bind, "0.0.0.0");
     }
 }

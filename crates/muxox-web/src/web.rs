@@ -2,6 +2,7 @@
 // Copyright (c) 2025 Geoff Seemueller
 // This file is part of muxox, released under the MIT License.
 
+use crate::mcp::run_mcp_server;
 use crate::ui;
 use crate::ws_proto::{ServiceInfo, WsInbound, WsOutbound};
 use anyhow::Result;
@@ -27,11 +28,12 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task;
 
 pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
+    let Config { service, mcp } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     let (b_tx, _) = broadcast::channel::<Vec<u8>>(100);
 
     let app = Arc::new(Mutex::new(App {
-        services: cfg.service.into_iter().map(ServiceState::new).collect(),
+        services: service.into_iter().map(ServiceState::new).collect(),
         selected: 0,
         log_offset_from_end: 0,
         tx: tx.clone(),
@@ -50,6 +52,16 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
 
     // Signal watcher
     task::spawn(signal_watcher(tx.clone()));
+
+    // Optional embedded MCP server for agent log access.
+    if mcp.enabled {
+        let app_for_mcp = Arc::clone(&app);
+        task::spawn(async move {
+            if let Err(e) = run_mcp_server(mcp, app_for_mcp).await {
+                eprintln!("MCP server error: {e}");
+            }
+        });
+    }
 
     // Broadcast messages to all connected WebSockets
     let b_tx_clone = b_tx.clone();

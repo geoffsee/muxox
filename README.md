@@ -40,7 +40,11 @@ Extract the binary and place it in your PATH.
 ```bash
 cargo install muxox
 ```
-1) Create a muxox.toml file in your project:
+1) Create a muxox.toml file in your project. The fastest way is to scaffold a fully-commented example:
+```bash
+muxox init
+```
+Or write one by hand:
 ```toml
 [[service]]
 name = "test-stdin"

@@ -21,7 +21,18 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 # (plain log streaming) to start every service.
 #
 # ---------------------------------------------------------------------------
-# Field reference
+# Top-level fields
+# ---------------------------------------------------------------------------
+# muxox_version (string,  optional) Semver range the running `muxox` binary
+#                                   must satisfy.  Examples: ">=1.4, <2.0",
+#                                   "^1.4", "~1.4.2", "=1.4.0".  Loading the
+#                                   config fails when the running version is
+#                                   outside the declared range.
+#
+# muxox_version = ">=1.4, <2.0"
+#
+# ---------------------------------------------------------------------------
+# Field reference (per `[[service]]`)
 # ---------------------------------------------------------------------------
 # name          (string,  required) Unique identifier shown in the UI.
 # cmd           (string,  required) Shell command to execute.

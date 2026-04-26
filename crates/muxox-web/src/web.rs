@@ -28,7 +28,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task;
 
 pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
-    let Config { service, mcp } = cfg;
+    let Config { service, mcp, .. } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     let (b_tx, _) = broadcast::channel::<Vec<u8>>(100);
 

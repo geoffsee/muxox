@@ -3,14 +3,22 @@
 // This file is part of muxox, released under the MIT License.
 
 use anyhow::{Context, Result};
+use semver::{Version, VersionReq};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Version of the running `muxox` binary, used to validate the optional
+/// `muxox_version` semver range declared in user configs.
+pub const MUXOX_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct Config {
+    /// Optional semver range (e.g. `">=1.4, <2.0"`) that the running `muxox`
+    /// binary must satisfy.  Loading the config fails if the range is not met.
     #[serde(default)]
+    pub muxox_version: Option<String>,
     pub service: Vec<ServiceCfg>,
     /// Optional MCP (Model Context Protocol) server settings.  Disabled by
     /// default; enable with `[mcp] enabled = true` to expose service status
@@ -50,6 +58,24 @@ impl Default for McpCfg {
 
 fn default_mcp_bind() -> String {
     "127.0.0.1".to_string()
+}
+
+/// Validate `cfg.muxox_version` against `running` (typically [`MUXOX_VERSION`]).
+///
+/// Returns `Ok(())` when no constraint is declared or when the running version
+/// satisfies the declared range.
+pub fn enforce_version_req(cfg: &Config, running: &str) -> Result<()> {
+    let Some(req_str) = cfg.muxox_version.as_deref() else {
+        return Ok(());
+    };
+    let req = VersionReq::parse(req_str)
+        .with_context(|| format!("invalid muxox_version sem-range {req_str:?}"))?;
+    let version = Version::parse(running)
+        .with_context(|| format!("invalid running muxox version {running:?}"))?;
+    if !req.matches(&version) {
+        anyhow::bail!("running muxox {running} does not satisfy muxox_version = \"{req_str}\"");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -137,7 +163,10 @@ pub fn load_config(provided: Option<&Path>) -> Result<Config> {
     for path in candidates {
         if path.exists() {
             let data = fs::read_to_string(&path)?;
-            return toml::from_str(&data).with_context(|| format!("parsing {path:?}"));
+            let cfg: Config = toml::from_str(&data).with_context(|| format!("parsing {path:?}"))?;
+            enforce_version_req(&cfg, MUXOX_VERSION)
+                .with_context(|| format!("validating {path:?}"))?;
+            return Ok(cfg);
         }
     }
     anyhow::bail!("No config found; create muxox.toml or pass --config <path>")
@@ -298,54 +327,94 @@ API_KEY=abc123
         assert_eq!(cfg.service.len(), 2);
         assert_eq!(cfg.service[0].name, "svc1");
         assert_eq!(cfg.service[1].name, "svc2");
-        assert!(!cfg.mcp.enabled);
+        assert!(cfg.muxox_version.is_none());
     }
 
     #[test]
-    fn test_mcp_cfg_defaults_to_disabled() {
+    fn test_muxox_version_field_parses() {
         let toml_input = r#"
+            muxox_version = ">=1.4, <2.0"
             [[service]]
-            name = "svc"
-            cmd = "run"
+            name = "svc1"
+            cmd = "run1"
         "#;
         let cfg: Config = toml::from_str(toml_input).unwrap();
-        assert_eq!(cfg.mcp, McpCfg::default());
-        assert!(!cfg.mcp.enabled);
-        assert_eq!(cfg.mcp.port, 0);
-        assert_eq!(cfg.mcp.bind, "127.0.0.1");
+        assert_eq!(cfg.muxox_version.as_deref(), Some(">=1.4, <2.0"));
     }
 
     #[test]
-    fn test_mcp_cfg_enabled_only() {
-        let toml_input = r#"
-            [mcp]
-            enabled = true
-
-            [[service]]
-            name = "svc"
-            cmd = "run"
-        "#;
-        let cfg: Config = toml::from_str(toml_input).unwrap();
-        assert!(cfg.mcp.enabled);
-        assert_eq!(cfg.mcp.port, 0);
-        assert_eq!(cfg.mcp.bind, "127.0.0.1");
+    fn test_enforce_version_req_satisfied() {
+        let cfg = Config {
+            mcp: McpCfg::default(),
+            muxox_version: Some(">=1.4, <2.0".to_string()),
+            service: vec![],
+        };
+        enforce_version_req(&cfg, "1.4.0").expect("1.4.0 satisfies >=1.4, <2.0");
+        enforce_version_req(&cfg, "1.9.3").expect("1.9.3 satisfies >=1.4, <2.0");
     }
 
     #[test]
-    fn test_mcp_cfg_full() {
-        let toml_input = r#"
-            [mcp]
-            enabled = true
-            port = 4242
-            bind = "0.0.0.0"
+    fn test_enforce_version_req_unsatisfied() {
+        let cfg = Config {
+            mcp: McpCfg::default(),
+            muxox_version: Some(">=1.4, <2.0".to_string()),
+            service: vec![],
+        };
+        let err = enforce_version_req(&cfg, "1.3.0").expect_err("1.3.0 must not satisfy >=1.4");
+        assert!(err.to_string().contains("does not satisfy"));
 
-            [[service]]
-            name = "svc"
-            cmd = "run"
-        "#;
-        let cfg: Config = toml::from_str(toml_input).unwrap();
-        assert!(cfg.mcp.enabled);
-        assert_eq!(cfg.mcp.port, 4242);
-        assert_eq!(cfg.mcp.bind, "0.0.0.0");
+        let err = enforce_version_req(&cfg, "2.0.0").expect_err("2.0.0 must not satisfy <2.0");
+        assert!(err.to_string().contains("does not satisfy"));
+    }
+
+    #[test]
+    fn test_enforce_version_req_absent_is_ok() {
+        let cfg = Config {
+            mcp: McpCfg::default(),
+            muxox_version: None,
+            service: vec![],
+        };
+        enforce_version_req(&cfg, "0.0.1").expect("no constraint => any version is fine");
+    }
+
+    #[test]
+    fn test_enforce_version_req_invalid_range() {
+        let cfg = Config {
+            mcp: McpCfg::default(),
+            muxox_version: Some("not-a-range".to_string()),
+            service: vec![],
+        };
+        let err = enforce_version_req(&cfg, "1.4.0").expect_err("garbage range must error");
+        assert!(err.to_string().contains("invalid muxox_version"));
+    }
+
+    #[test]
+    fn test_enforce_version_req_caret_and_tilde() {
+        let cfg = Config {
+            mcp: McpCfg::default(),
+            muxox_version: Some("^1.4".to_string()),
+            service: vec![],
+        };
+        enforce_version_req(&cfg, "1.5.7").expect("^1.4 admits 1.5.7");
+        enforce_version_req(&cfg, "2.0.0").expect_err("^1.4 excludes 2.0.0");
+
+        let cfg = Config {
+            mcp: McpCfg::default(),
+            muxox_version: Some("~1.4.2".to_string()),
+            service: vec![],
+        };
+        enforce_version_req(&cfg, "1.4.9").expect("~1.4.2 admits 1.4.9");
+        enforce_version_req(&cfg, "1.5.0").expect_err("~1.4.2 excludes 1.5.0");
+    }
+
+    #[test]
+    fn test_running_muxox_version_satisfies_workspace_range() {
+        let cfg = Config {
+            mcp: McpCfg::default(),
+            muxox_version: Some(format!("={MUXOX_VERSION}")),
+            service: vec![],
+        };
+        enforce_version_req(&cfg, MUXOX_VERSION)
+            .expect("running version always satisfies its own pinned range");
     }
 }

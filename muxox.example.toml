@@ -1,3 +1,7 @@
+# Optional: require a specific muxox release range.  Loading the config
+# fails when the running binary does not satisfy the semver range.
+# muxox_version = ">=1.4, <2.0"
+
 # Optional embedded MCP (Model Context Protocol) server.  When enabled, muxox
 # exposes a JSON-RPC endpoint at http://{bind}:{port}/mcp that lets MCP-aware
 # agents list services and read their captured logs.  Available in web mode

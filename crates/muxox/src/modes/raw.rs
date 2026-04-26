@@ -14,7 +14,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::task;
 
 pub async fn run_raw_mode(cfg: Config) -> Result<()> {
-    let Config { service, mcp } = cfg;
+    let Config { service, mcp, .. } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     let app = Arc::new(Mutex::new(App {
         services: service.into_iter().map(ServiceState::new).collect(),

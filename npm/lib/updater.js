@@ -17,6 +17,7 @@ function getPlatformInfo() {
     'darwin-x64': { target: 'x86_64-apple-darwin', ext: 'tar.gz' },
     'darwin-arm64': { target: 'aarch64-apple-darwin', ext: 'tar.gz' },
     'linux-x64': { target: 'x86_64-unknown-linux-gnu', ext: 'tar.gz' },
+    'linux-arm64': { target: 'aarch64-unknown-linux-gnu', ext: 'tar.gz' },
     'win32-x64': { target: 'x86_64-pc-windows-msvc', ext: 'exe.zip' }
   };
 

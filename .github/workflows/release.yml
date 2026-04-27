@@ -151,6 +151,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             name: muxox-x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            name: muxox-aarch64-unknown-linux-gnu
           - target: x86_64-apple-darwin
             os: macos-latest
             name: muxox-x86_64-apple-darwin
@@ -278,6 +281,7 @@ jobs:
             --notes-file changelog.md \
             $PRERELEASE_FLAG \
             artifacts/muxox-x86_64-unknown-linux-gnu/muxox-x86_64-unknown-linux-gnu.tar.gz \
+            artifacts/muxox-aarch64-unknown-linux-gnu/muxox-aarch64-unknown-linux-gnu.tar.gz \
             artifacts/muxox-x86_64-apple-darwin/muxox-x86_64-apple-darwin.tar.gz \
             artifacts/muxox-aarch64-apple-darwin/muxox-aarch64-apple-darwin.tar.gz \
             artifacts/muxox-x86_64-pc-windows-msvc.exe/muxox-x86_64-pc-windows-msvc.exe.zip

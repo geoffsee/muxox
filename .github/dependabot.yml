@@ -1,49 +1,51 @@
 version: 2
 updates:
-  # Monitor Rust dependencies in the main crate
+  # Cargo has to be pointed at the workspace root, not at crates/muxox.
+  # Dependabot only checks out the configured directory, and every member
+  # manifest inherits edition/version/license from [workspace.package] --
+  # so from inside crates/muxox there is no workspace root to inherit from
+  # and the manifest fails to parse. The root is also where the only real
+  # Cargo.lock lives; member lockfiles are ignored by cargo entirely.
   - package-ecosystem: "cargo"
-    directory: "/crates/muxox"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"
       time: "09:00"
       timezone: "UTC"
-    # Focus on security updates with higher priority
     open-pull-requests-limit: 10
-    reviewers:
-      - "security-team"
     assignees:
-      - "maintainer"
+      - "geoffsee"
     labels:
       - "dependencies"
-      - "security"
-    # Security updates get higher priority
-    allow:
-      - dependency-type: "all"
-    # Group minor and patch updates to reduce noise
-    # Separate major updates for careful review
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]
+    # One PR per week for the routine churn, so only genuinely breaking
+    # bumps arrive as PRs that need a human to read them.
+    groups:
+      cargo-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "deps"
       include: "scope"
 
-  # Monitor security updates more frequently
-  - package-ecosystem: "cargo"
-    directory: "/crates/muxox"
-    schedule:
-      interval: "daily"
-    # Only security updates in daily checks
-    allow:
-      - dependency-type: "direct"
-        update-types: ["security"]
-      - dependency-type: "indirect"
-        update-types: ["security"]
-    open-pull-requests-limit: 5
-    labels:
-      - "security-update"
-      - "high-priority"
-    commit-message:
-      prefix: "security"
-      include: "scope"
+# Deliberately not configured here:
+#
+#   ignore: version-update:semver-major
+#     Ignore conditions apply to security updates too, not just version
+#     updates. A blanket major-version ignore silently suppresses any
+#     advisory whose only fix is a major bump -- which is what happened
+#     with the lru IterMut advisory: the fix required ratatui 0.28 -> 0.30,
+#     so Dependabot had nothing in-range to offer and stayed quiet.
+#
+#   a second "security only" ecosystem entry
+#     There is no allow/update-types value that means "security"; the only
+#     legal values are version-update:semver-{patch,minor,major}, which is
+#     what made this file fail validation. Security updates are a separate
+#     mechanism enabled in repo settings and are not scheduled here -- they
+#     open as soon as an advisory lands, independent of `schedule`.
+#
+#   reviewers:
+#     Removed from the Dependabot schema; use CODEOWNERS for review routing.

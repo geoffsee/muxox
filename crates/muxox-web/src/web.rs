@@ -8,6 +8,7 @@ use crate::ws_proto::{ServiceInfo, WsInbound, WsOutbound};
 use anyhow::Result;
 use axum::{
     Router,
+    body::Bytes,
     extract::{
         State,
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -30,7 +31,10 @@ use tokio::task;
 pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     let Config { service, mcp, .. } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
-    let (b_tx, _) = broadcast::channel::<Vec<u8>>(100);
+    // Bytes rather than Vec<u8>: broadcast clones the value once per
+    // receiver, and cloning Bytes is a refcount bump instead of a full copy
+    // of the frame for every connected client.
+    let (b_tx, _) = broadcast::channel::<Bytes>(100);
 
     let app = Arc::new(Mutex::new(App {
         services: service.into_iter().map(ServiceState::new).collect(),
@@ -88,8 +92,9 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
             };
 
             if let Some(msg) = ws_msg {
-                let _ = b_tx_clone
-                    .send(serde_json::to_vec(&msg).expect("WsOutbound serialization cannot fail"));
+                let _ = b_tx_clone.send(Bytes::from(
+                    serde_json::to_vec(&msg).expect("WsOutbound serialization cannot fail"),
+                ));
             }
 
             if matches!(msg, AppMsg::AbortedAll) {
@@ -126,7 +131,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
 
 struct WebState {
     app: Arc<Mutex<App>>,
-    broadcast_tx: broadcast::Sender<Vec<u8>>,
+    broadcast_tx: broadcast::Sender<Bytes>,
 }
 
 async fn index_handler() -> impl IntoResponse {

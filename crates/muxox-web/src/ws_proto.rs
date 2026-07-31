@@ -1,3 +1,4 @@
+use axum::body::Bytes;
 use axum::extract::ws::Message;
 use serde::{Deserialize, Serialize};
 
@@ -34,7 +35,7 @@ impl WsOutbound {
     /// Encode as a binary WebSocket frame (JSON bytes).
     pub fn to_message(&self) -> Message {
         let bytes = serde_json::to_vec(self).expect("WsOutbound serialization cannot fail");
-        Message::Binary(bytes)
+        Message::Binary(Bytes::from(bytes))
     }
 }
 

@@ -19,7 +19,7 @@ tui-bridge.workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 dioxus-core = "0.7"
-ratatui = "0.28"
+ratatui = "0.30"
 crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
 

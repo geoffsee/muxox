@@ -245,7 +245,7 @@ mod linux {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         // Parse "net=net:[...] mnt=mnt:[...]"
-        let parts: Vec<&str> = stdout.trim().split_whitespace().collect();
+        let parts: Vec<&str> = stdout.split_whitespace().collect();
         assert_eq!(
             parts.len(),
             2,

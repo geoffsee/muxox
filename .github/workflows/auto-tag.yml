@@ -1,9 +1,9 @@
 name: Auto Tag
 
-# Cuts a release tag when dependencies change on master -- primarily so
+# Cuts a release tag when dependencies change on main -- primarily so
 # Dependabot security updates ship to users instead of sitting in the repo.
 #
-# Order matters: the version bump is committed to master FIRST, and the tag
+# Order matters: the version bump is committed to main FIRST, and the tag
 # is placed on that commit. release.yml checks out the tag, so a tag pushed
 # ahead of its bump builds the previous version and cargo publish fails on
 # an already-published version.
@@ -24,7 +24,7 @@ name: Auto Tag
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - "Cargo.lock"
   workflow_dispatch:
@@ -180,9 +180,9 @@ jobs:
           git tag -a "v$NEXT" -m "Release v$NEXT"
 
           # Push the commit before the tag. If the tag landed first, a
-          # release build could check it out while master still lacked the
+          # release build could check it out while main still lacked the
           # bump.
-          git push origin HEAD:master
+          git push origin HEAD:main
           git push origin "v$NEXT"
 
           echo "Tagged v$NEXT -- release.yml takes it from here."

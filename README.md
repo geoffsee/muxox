@@ -71,7 +71,7 @@ muxox --config path/to/muxox.toml
 ```bash
 muxox --raw
 ```
-5)
+
 ## Configuration
 
 Each service supports:

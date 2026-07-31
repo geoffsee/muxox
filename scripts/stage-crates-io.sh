@@ -188,7 +188,7 @@ path = "src/main.rs"
 # crates/*/Cargo.toml when adding or bumping a dependency.
 [dependencies]
 anyhow = "1"
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 dioxus = { version = "0.7", features = ["fullstack", "ssr"] }
@@ -196,7 +196,7 @@ dioxus-core = "0.7"
 directories = "5"
 futures-util = "0.3"
 open = "5"
-ratatui = "0.28"
+ratatui = "0.30"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -216,6 +216,61 @@ $RELEASE_PROFILE
 
 [workspace]
 EOF
+
+# --- guard against the hand-maintained dependency list drifting ---
+#
+# The [dependencies] block above is written by hand because the staged crate
+# is a flattened union of four workspace crates. Dependabot only ever edits
+# crates/*/Cargo.toml, so a bump lands there and silently leaves this file
+# behind -- and because the staged crate still compiles against the older
+# version, nothing fails. That is how ratatui sat at 0.28 here while the
+# workspace moved to 0.30, which would have published a crate still pulling
+# the vulnerable lru 0.12.
+#
+# Compare the two and fail loudly rather than shipping a stale dependency.
+dep_versions() {
+  awk '
+    /^\[/ {
+      in_deps = ($0 ~ /^\[(target\.[^]]*\.)?(dev-)?dependencies\]$/)
+      next
+    }
+    !in_deps { next }
+    /workspace *= *true/ { next }
+    /^[a-zA-Z0-9_-]+ *=/ {
+      name = $1
+      if (match($0, /version *= *"[^"]*"/)) {
+        v = substr($0, RSTART, RLENGTH)
+        sub(/version *= *"/, "", v)
+      } else if (match($0, /= *"[^"]*"/)) {
+        v = substr($0, RSTART, RLENGTH)
+        sub(/= *"/, "", v)
+      } else {
+        next
+      }
+      sub(/"$/, "", v)
+      print name "\t" v
+    }
+  ' "$@" | sort -u
+}
+
+drift=0
+while IFS=$'\t' read -r name want; do
+  [[ -z "$name" ]] && continue
+  got="$(dep_versions "$STAGE/Cargo.toml" | awk -F'\t' -v n="$name" '$1 == n { print $2; exit }')"
+  if [[ -z "$got" ]]; then
+    echo "dependency drift: $name = \"$want\" is declared in crates/*/Cargo.toml but missing from the staged manifest" >&2
+    drift=1
+  elif [[ "$got" != "$want" ]]; then
+    echo "dependency drift: $name is \"$want\" in crates/*/Cargo.toml but \"$got\" in this script" >&2
+    drift=1
+  fi
+done < <(dep_versions "$ROOT"/crates/*/Cargo.toml)
+
+if [[ "$drift" -ne 0 ]]; then
+  echo "" >&2
+  echo "Update the [dependencies] block in $(basename "${BASH_SOURCE[0]}") to match." >&2
+  exit 1
+fi
 
 echo "Staged crates.io package at $STAGE"
 echo "Verify:  cargo test    --manifest-path publish/muxox/Cargo.toml"

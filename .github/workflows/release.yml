@@ -128,17 +128,19 @@ jobs:
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
-      - name: Publish crates in dependency order
+      # muxox is developed as a workspace but published as a single crate:
+      # stage-crates-io.sh flattens muxox-core, muxox-web and tui-bridge into
+      # publish/muxox so there is only one crate to version and release.
+      - name: Stage single-crate package
+        run: ./scripts/stage-crates-io.sh
+
+      - name: Verify staged package
+        run: cargo test --manifest-path publish/muxox/Cargo.toml
+
+      - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: |
-          cargo publish -p muxox-core
-          sleep 15
-          cargo publish -p tui-bridge
-          sleep 15
-          cargo publish -p muxox-web
-          sleep 15
-          cargo publish -p muxox
+        run: cargo publish --manifest-path publish/muxox/Cargo.toml
 
   build-binaries:
     name: Build binaries

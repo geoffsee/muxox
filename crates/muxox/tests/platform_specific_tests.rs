@@ -9,11 +9,8 @@ mod unix_tests {
 
     #[test]
     fn test_unix_shell_detection() {
-        // This is a simple test to verify that we're on a Unix platform
-        // The actual shell_program function is private in main.rs
-        assert!(cfg!(unix), "This test should only run on Unix platforms");
-
-        // We can test that standard Unix directories exist
+        // The actual shell_program function is private in main.rs, so instead
+        // verify the shell it resolves to is actually present on this platform.
         assert!(
             std::path::Path::new("/bin/sh").exists()
                 || std::path::Path::new("/usr/bin/sh").exists(),

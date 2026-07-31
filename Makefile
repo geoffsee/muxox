@@ -1,4 +1,4 @@
-.PHONY: all build test lint run run-tui run-raw demo fmt clean help
+.PHONY: all build test lint run run-tui run-raw demo fmt stage stage-verify clean help
 
 # Default target
 all: build
@@ -27,8 +27,16 @@ demo: ## Demo: Run the example config in TUI mode (showcases env_file, interacti
 fmt: ## Fmt: Run cargo fmt --all
 	cargo fmt --all
 
+stage: ## Stage: Flatten the workspace into the single publishable crate at publish/muxox
+	./scripts/stage-crates-io.sh
+
+stage-verify: stage ## Stage-verify: Stage, then test and package the publishable crate
+	cargo test --manifest-path publish/muxox/Cargo.toml
+	cargo package --manifest-path publish/muxox/Cargo.toml
+
 clean: ## Clean: Run cargo clean
 	cargo clean
+	rm -rf publish
 
 help: ## Help: Show this help message
 	@echo "Usage: make [target]"

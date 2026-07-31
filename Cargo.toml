@@ -9,7 +9,7 @@ members = [
 default-members = ["crates/muxox"]
 
 [workspace.package]
-version = "1.6.0"
+version = "1.7.0"
 edition = "2024"
 authors = ["Geoff Seemueller <geoff@seemueller.io>"]
 license = "MIT"
@@ -17,6 +17,19 @@ repository = "https://github.com/geoffsee/muxox"
 homepage = "https://github.com/geoffsee/muxox"
 
 [workspace.dependencies]
-muxox-core = { version = "1.6.0", path = "crates/muxox-core" }
-muxox-web = { version = "1.6.0", path = "crates/muxox-web" }
-tui-bridge = { version = "1.6.0", path = "crates/tui-bridge" }
+muxox-core = { version = "1.7.0", path = "crates/muxox-core" }
+muxox-web = { version = "1.7.0", path = "crates/muxox-web" }
+tui-bridge = { version = "1.7.0", path = "crates/tui-bridge" }
+
+# muxox ships prebuilt binaries (GitHub releases + npm), so release builds
+# optimize hard and strip everything not needed at runtime.
+# Keep in sync with the [profile.release] block in scripts/stage-crates-io.sh,
+# since the published crate is its own workspace root and does not inherit this.
+[profile.release]
+opt-level = "z"   # optimize for size; muxox is I/O bound, so binary size is the metric that matters
+lto = "fat"       # cross-crate inlining and dead code elimination over the whole graph
+codegen-units = 1 # one unit lets LLVM see everything at once; slower build, smaller output
+strip = true      # drop symbol tables and debug info from the shipped binary
+debug = false     # no debuginfo in release (explicit; this is also the default)
+panic = "abort"   # nothing in muxox catches unwinds, so drop the unwinding machinery
+incremental = false

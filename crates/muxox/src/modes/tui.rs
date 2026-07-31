@@ -343,11 +343,9 @@ pub(crate) fn handle_key(k: KeyEvent, app: &mut App) {
             stop_service(idx, app);
             start_service(idx, app);
         }
-        KeyCode::Enter | KeyCode::Char('i') => {
-            if app.services[app.selected].cfg.interactive {
-                app.input_mode = true;
-                app.input_buffer.clear();
-            }
+        KeyCode::Enter | KeyCode::Char('i') if app.services[app.selected].cfg.interactive => {
+            app.input_mode = true;
+            app.input_buffer.clear();
         }
         _ => {}
     }

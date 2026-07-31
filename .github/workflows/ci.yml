@@ -43,5 +43,18 @@ jobs:
 
       - name: Build Docs
         shell: bash
-        run: | 
-          cargo doc -p muxox --no-deps 
+        run: |
+          cargo doc -p muxox --no-deps
+
+      # muxox ships as a single crate flattened out of this workspace. Build it
+      # on every push so drift (a new module, a new dependency) is caught here
+      # rather than on release day. Shares the cached target dir so the already
+      # built dependency artifacts are reused.
+      - name: Verify single-crate package
+        shell: bash
+        run: |
+          ./scripts/stage-crates-io.sh
+          cargo clippy --manifest-path publish/muxox/Cargo.toml --all-targets --all-features \
+            --target-dir target/staged -- -D warnings
+          cargo test --manifest-path publish/muxox/Cargo.toml --target-dir target/staged
+          cargo package --manifest-path publish/muxox/Cargo.toml --target-dir target/staged

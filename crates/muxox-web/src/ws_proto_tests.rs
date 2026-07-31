@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::ws_proto::{ServiceInfo, WsInbound, WsOutbound};
+    use axum::body::Bytes;
     use axum::extract::ws::Message;
 
     // --- WsOutbound serialization ---
@@ -83,7 +84,7 @@ mod tests {
     #[test]
     fn command_from_binary_message() {
         let json = br#"{"type":"Command","idx":0,"command":"stop"}"#;
-        let msg = Message::Binary(json.to_vec());
+        let msg = Message::Binary(Bytes::from_static(json));
         let cmd = WsInbound::from_message(msg).unwrap();
         match cmd {
             WsInbound::Command { idx, command, .. } => {
@@ -131,7 +132,7 @@ mod tests {
 
     #[test]
     fn ping_message_returns_none() {
-        let msg = Message::Ping(vec![]);
+        let msg = Message::Ping(Bytes::new());
         assert!(WsInbound::from_message(msg).is_none());
     }
 

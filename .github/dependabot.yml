@@ -18,8 +18,13 @@ updates:
       - "geoffsee"
     labels:
       - "dependencies"
-    # One PR per week for the routine churn, so only genuinely breaking
-    # bumps arrive as PRs that need a human to read them.
+    # Two PRs per week, maximum: one safe, one that needs reading.
+    #
+    # Majors are grouped rather than ignored. Ignoring them suppresses
+    # security advisories whose only fix is a major bump -- that is how the
+    # lru IterMut advisory stayed hidden for six months. Grouping keeps them
+    # visible while collapsing what would otherwise be one PR per crate
+    # (dropping the old ignore rule surfaced five at once).
     groups:
       cargo-minor-and-patch:
         patterns:
@@ -27,6 +32,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      cargo-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
     commit-message:
       prefix: "deps"
       include: "scope"

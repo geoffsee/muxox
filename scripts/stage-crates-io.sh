@@ -184,8 +184,10 @@ path = "src/lib.rs"
 name = "muxox"
 path = "src/main.rs"
 
-# Union of the workspace crates' dependencies. Keep in sync with
-# crates/*/Cargo.toml when adding or bumping a dependency.
+# Union of the workspace crates' dependencies. Package names and features are
+# hand-maintained (the staged crate is a flattened union); versions below are
+# placeholders rewritten from crates/*/Cargo.toml immediately after this heredoc
+# so Dependabot bumps flow through without a second edit here.
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
@@ -217,17 +219,18 @@ $RELEASE_PROFILE
 [workspace]
 EOF
 
-# --- guard against the hand-maintained dependency list drifting ---
+# --- sync + guard staged dependency versions ---
 #
-# The [dependencies] block above is written by hand because the staged crate
-# is a flattened union of four workspace crates. Dependabot only ever edits
-# crates/*/Cargo.toml, so a bump lands there and silently leaves this file
-# behind -- and because the staged crate still compiles against the older
-# version, nothing fails. That is how ratatui sat at 0.28 here while the
-# workspace moved to 0.30, which would have published a crate still pulling
-# the vulnerable lru 0.12.
+# The [dependencies] block above lists the union of packages/features by hand
+# because the staged crate flattens four workspace crates. Dependabot only
+# edits crates/*/Cargo.toml, so without a sync step a bump would leave the
+# staged manifest on the old version -- and because that still compiles,
+# nothing would fail. That is how ratatui sat at 0.28 here while the workspace
+# moved to 0.30, which would have published a crate still pulling vulnerable
+# lru 0.12.
 #
-# Compare the two and fail loudly rather than shipping a stale dependency.
+# Rewrite every staged version from the workspace manifests, then fail if any
+# workspace dependency is still missing from the hand-maintained list.
 dep_versions() {
   awk '
     /^\[/ {
@@ -253,6 +256,18 @@ dep_versions() {
   ' "$@" | sort -u
 }
 
+while IFS=$'\t' read -r name want; do
+  [[ -z "$name" ]] && continue
+  perl -i -pe '
+    if (/^\[/) {
+      $in = (/^\[(target\.[^]]*\.)?(dev-)?dependencies\]$/);
+    } elsif ($in && /^'"$name"' *=/) {
+      if (/version *= *"/) { s/(version *= *)"[^"]*"/$1"'"$want"'"/; }
+      else                 { s/(= *)"[^"]*"/$1"'"$want"'"/; }
+    }
+  ' "$STAGE/Cargo.toml"
+done < <(dep_versions "$ROOT"/crates/*/Cargo.toml)
+
 drift=0
 while IFS=$'\t' read -r name want; do
   [[ -z "$name" ]] && continue
@@ -261,14 +276,14 @@ while IFS=$'\t' read -r name want; do
     echo "dependency drift: $name = \"$want\" is declared in crates/*/Cargo.toml but missing from the staged manifest" >&2
     drift=1
   elif [[ "$got" != "$want" ]]; then
-    echo "dependency drift: $name is \"$want\" in crates/*/Cargo.toml but \"$got\" in this script" >&2
+    echo "dependency drift: $name is \"$want\" in crates/*/Cargo.toml but \"$got\" in the staged manifest after sync" >&2
     drift=1
   fi
 done < <(dep_versions "$ROOT"/crates/*/Cargo.toml)
 
 if [[ "$drift" -ne 0 ]]; then
   echo "" >&2
-  echo "Update the [dependencies] block in $(basename "${BASH_SOURCE[0]}") to match." >&2
+  echo "Add the missing package to the [dependencies] block in $(basename "${BASH_SOURCE[0]}")." >&2
   exit 1
 fi
 

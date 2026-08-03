@@ -11,5 +11,5 @@ description = "TUI rendering bridge between Dioxus and ratatui for muxox"
 [dependencies]
 dioxus-core = "0.7"
 ratatui = "0.30"
-crossterm = "0.28"
+crossterm = "0.29"
 anyhow = "1"

@@ -65,7 +65,6 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    muxox_core::log::init();
     let cli = Cli::parse();
 
     if let Some(command) = cli.command {
@@ -81,6 +80,8 @@ async fn main() -> Result<()> {
             } => run_install_skill(&client, dry_run, force),
         };
     }
+
+    muxox_core::log::init();
 
     let mode = if cli.raw {
         "raw"

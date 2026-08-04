@@ -79,7 +79,7 @@ fn run_install_skill_at(
     dry_run: bool,
     force: bool,
 ) -> Result<()> {
-    let selected: Vec<SkillClient> = if clients.iter().any(|client| *client == SkillClient::All) {
+    let selected: Vec<SkillClient> = if clients.contains(&SkillClient::All) {
         SkillClient::all().to_vec()
     } else {
         let mut selected = Vec::new();
@@ -101,9 +101,9 @@ fn run_install_skill_at(
             let path = destination.join(relative_path);
 
             if path.exists() {
-                let existing = fs::read_to_string(&path)
-                    .with_context(|| format!("reading {}", path.display()))?;
-                if existing == *contents {
+                let existing =
+                    fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+                if existing == contents.as_bytes() {
                     println!("Up to date {}", path.display());
                     continue;
                 }
@@ -144,10 +144,8 @@ mod tests {
     impl TestHome {
         fn new(label: &str) -> Self {
             let n = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "muxox_skill_{label}_{}_{n}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("muxox_skill_{label}_{}_{n}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).unwrap();
             Self { path }
@@ -207,6 +205,21 @@ mod tests {
 
         run_install_skill_at(home.path(), &[SkillClient::Codex], false, false).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "user version");
+
+        run_install_skill_at(home.path(), &[SkillClient::Codex], false, true).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), SKILL_MD);
+        assert_client_tree(home.path(), SkillClient::Codex);
+    }
+
+    #[test]
+    fn non_utf8_existing_file_skips_without_force_and_replaces_with_force() {
+        let home = TestHome::new("non_utf8");
+        let path = home.path().join(".codex/skills/muxox/SKILL.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+
+        run_install_skill_at(home.path(), &[SkillClient::Codex], false, false).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), vec![0xff, 0xfe, 0xfd]);
 
         run_install_skill_at(home.path(), &[SkillClient::Codex], false, true).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), SKILL_MD);
@@ -361,10 +374,7 @@ mod tests {
         let err = run_install_skill_at(home.path(), &[SkillClient::Codex], false, false)
             .expect_err("file blocking destination parent must error");
         let message = format!("{err:#}");
-        assert!(
-            message.contains("creating"),
-            "unexpected error: {message}"
-        );
+        assert!(message.contains("creating"), "unexpected error: {message}");
     }
 
     #[cfg(unix)]
@@ -389,9 +399,6 @@ mod tests {
 
         let err = result.expect_err("unreadable existing file must error");
         let message = format!("{err:#}");
-        assert!(
-            message.contains("reading"),
-            "unexpected error: {message}"
-        );
+        assert!(message.contains("reading"), "unexpected error: {message}");
     }
 }

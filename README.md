@@ -44,6 +44,19 @@ cargo install muxox
 ```bash
 muxox init
 ```
+
+Install the Muxox agent skill globally for Codex, Cursor, Claude, Vibe, Grok,
+Agy, Hermes, OpenCode, and Cline:
+
+```bash
+muxox install-skill
+```
+
+Use `--client codex,cursor` to select clients, `--dry-run` to preview changes,
+or `--force` to replace an existing skill. Existing files that differ are left
+alone (printed as Skipped) unless you pass `--force`. Hermes installs under
+`~/skills/muxox`; other clients use their usual `~/.…/skills/muxox` paths.
+
 Or write one by hand:
 ```toml
 [[service]]

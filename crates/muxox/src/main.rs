@@ -9,7 +9,12 @@ use clap::{Parser, Subcommand};
 
 mod modes;
 
-use modes::{init::run_init, raw::run_raw_mode, tui::run_tui_mode};
+use modes::{
+    init::run_init,
+    raw::run_raw_mode,
+    skill::{SkillClient, run_install_skill},
+    tui::run_tui_mode,
+};
 use muxox_core::config::load_config;
 use muxox_web::run_web_mode;
 
@@ -44,17 +49,39 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
+    /// Install the Muxox agent skill for supported coding agents.
+    InstallSkill {
+        /// Install for selected clients (comma-separated); defaults to all.
+        #[arg(long, value_enum, value_delimiter = ',', default_value = "all")]
+        client: Vec<SkillClient>,
+        /// Show what would be installed without writing files.
+        #[arg(long)]
+        dry_run: bool,
+        /// Replace an existing skill when its contents differ.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    muxox_core::log::init();
     let cli = Cli::parse();
 
-    if let Some(Command::Init { output, force }) = cli.command {
-        let target = output.unwrap_or_else(|| PathBuf::from("muxox.toml"));
-        return run_init(&target, force);
+    if let Some(command) = cli.command {
+        return match command {
+            Command::Init { output, force } => {
+                let target = output.unwrap_or_else(|| PathBuf::from("muxox.toml"));
+                run_init(&target, force)
+            }
+            Command::InstallSkill {
+                client,
+                dry_run,
+                force,
+            } => run_install_skill(&client, dry_run, force),
+        };
     }
+
+    muxox_core::log::init();
 
     let mode = if cli.raw {
         "raw"

@@ -1,3 +1,18 @@
 #!/bin/sh
 set -e
-cargo fmt --all -- --check
+
+echo "Running pre-commit checks..."
+
+echo "Checking formatting..."
+if ! cargo fmt --all -- --check; then
+    echo "Formatting check failed. Run 'cargo fmt --all' to fix."
+    exit 1
+fi
+
+echo "Running clippy..."
+if ! cargo clippy --all-targets --all-features -- -D warnings; then
+    echo "Clippy check failed. Fix the warnings above."
+    exit 1
+fi
+
+echo "Pre-commit checks passed."

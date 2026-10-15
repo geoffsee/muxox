@@ -24,6 +24,25 @@ Or use with npx:
 npx muxox
 ```
 
+## Updates
+
+Startup only checks for updates; it never downloads a newer executable or
+rewrites package metadata. A newer stable version in your package manager's
+configured registry produces a web banner, TUI notice, or raw stderr message.
+Offline checks are quiet and do not delay services.
+
+Run `muxox update` to upgrade with the npm, pnpm, Yarn, or Bun installation that
+owns the package. Global installs stay global. For a project dependency, run
+from the owning project or workspace; its manifest and lockfile can advance
+beyond the previous version range. The launcher waits for the native process
+to exit before updating, including on Windows.
+
+Postinstall records the manager and installation context. If the receipt is
+missing or stale, reinstall with the original manager. Older versions need
+that manual package-manager upgrade once to receive this launcher. Temporary
+npx/dlx/bunx installs should be refreshed with their original runner command
+using `muxox@latest`. `--standalone` cannot bypass package-manager ownership.
+
 ## Quick Start
 
 1) Create a `muxox.toml` file in your project:
@@ -101,6 +120,16 @@ This package automatically downloads and installs the appropriate pre-built bina
 - Node.js 14.0.0 or higher (for npm installation)
 - A terminal with true color support
 - All commands referenced in your config must be available in PATH
+
+## Release checklist
+
+- Keep the npm package version and native release version in sync.
+- Publish the matching GitHub binary assets before publishing the npm package,
+  because postinstall downloads that exact release.
+- Include the new launcher and `lib/manager.js` in the npm release. Existing
+  users need one package-manager upgrade to receive them and record ownership.
+- Run the package-manager tests with `MUXOX_TEST_BINARY` set to a freshly built
+  native executable; CI exercises this on Linux, macOS, and Windows.
 
 ## License
 

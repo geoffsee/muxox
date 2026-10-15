@@ -14,6 +14,7 @@ use modes::{
     raw::run_raw_mode,
     skill::{SkillClient, run_install_skill},
     tui::run_tui_mode,
+    update::run_update,
 };
 use muxox_core::config::load_config;
 use muxox_web::run_web_mode;
@@ -40,6 +41,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Install the latest stable release using this installation's package manager.
+    Update {
+        /// Allow direct replacement of an untracked standalone executable.
+        #[arg(long)]
+        standalone: bool,
+    },
     /// Create a `muxox.toml` in the current directory with a commented example.
     Init {
         /// Path to write the config file to. Defaults to ./muxox.toml.
@@ -69,6 +76,7 @@ async fn main() -> Result<()> {
 
     if let Some(command) = cli.command {
         return match command {
+            Command::Update { standalone } => run_update(standalone).await,
             Command::Init { output, force } => {
                 let target = output.unwrap_or_else(|| PathBuf::from("muxox.toml"));
                 run_init(&target, force)

@@ -197,6 +197,13 @@ dioxus = { version = "0.7", features = ["fullstack", "ssr"] }
 dioxus-core = "0.7"
 directories = "5"
 futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+self-replace = "1.5"
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "6", default-features = false, features = ["deflate-flate2"] }
+tempfile = "3"
 open = "5"
 ratatui = "0.30"
 semver = "1"

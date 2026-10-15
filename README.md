@@ -85,6 +85,42 @@ muxox --config path/to/muxox.toml
 muxox --raw
 ```
 
+## Updates
+
+Muxox checks for a newer stable version in the background on each ordinary
+launch. When one is available, it shows a web banner, a TUI notice, or one line
+on stderr in raw mode. Checks have a short deadline, stay quiet offline, and
+never delay service startup or install anything automatically.
+
+```bash
+muxox update
+```
+
+The update command runs before loading configuration or starting services:
+
+- **Cargo:** checks crates.io and runs Cargo with the tracked installation root,
+  features, profile, and target. Git, path, custom-registry, and legacy untracked
+  Cargo installations must use their original Cargo install command.
+- **npm, pnpm, Yarn, Bun:** checks the manager's configured registry and runs that
+  same manager. Global installs retain their installation scope. For a local
+  install, run the command from the project or workspace that declares Muxox;
+  its manifest and lockfile may be upgraded to the latest stable version across
+  the previous version range. The native process exits before the manager runs.
+- **Downloaded executable:** use `muxox update --standalone` to explicitly allow
+  replacement of an untracked binary. Muxox checks GitHub Releases, verifies the
+  asset's SHA-256 digest and executable version, and replaces the running binary.
+  This override is rejected for recognized package-manager installations.
+
+Checks compare the running binary's version and never offer a downgrade.
+Missing installation receipts, ambiguous owners, and temporary npx/dlx/bunx
+installs require the original package-manager command; Muxox explains this when
+an explicit update is requested. Package-manager output and failures are shown.
+
+Older JavaScript wrappers must first be upgraded or reinstalled with their
+original package manager to receive the new launcher and installation receipt.
+Publishing a GitHub release alone does not make it available to Cargo or
+JavaScript package-manager installations.
+
 ## Configuration
 
 Each service supports:

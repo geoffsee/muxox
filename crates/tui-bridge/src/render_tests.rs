@@ -324,3 +324,34 @@ mod tests {
         term.draw(|f| render_view(f, f.area(), &node)).unwrap();
     }
 }
+
+#[test]
+fn update_notice_renders_above_help_in_a_small_terminal() {
+    use crate::{render::render_view, view::*};
+    use ratatui::{Terminal, backend::TestBackend, layout::Constraint};
+    let mut terminal = Terminal::new(TestBackend::new(45, 5)).unwrap();
+    let node = ViewNode::Column(ColumnNode {
+        children: vec![
+            ViewNode::Text(TextNode {
+                title: "Logs".into(),
+                lines: vec!["ready".into()],
+                scroll: 0,
+            }),
+            ViewNode::Notice("Muxox 2.0.0 available: muxox update".into()),
+            ViewNode::HelpBar(HelpBarNode {
+                bindings: vec![("q".into(), "Quit".into())],
+            }),
+        ],
+        constraints: vec![
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ],
+    });
+    terminal.draw(|f| render_view(f, f.area(), &node)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let row = |y| (0..45).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+    assert!(row(1).contains("ready"));
+    assert!(row(3).contains("muxox update"));
+    assert!(row(4).contains("Quit"));
+}

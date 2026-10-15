@@ -4,6 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { updateBinary, GITHUB_REPO } = require('./lib/updater');
 
+const { recordReceipt } = require('./lib/manager');
+
 const VERSION = require('./package.json').version;
 
 async function install() {
@@ -18,6 +20,8 @@ async function install() {
     console.log(`Installing muxox v${VERSION}...`);
     await updateBinary(VERSION, binDir);
 
+    try { recordReceipt(); }
+    catch (error) { console.warn(`Muxox installed, but automatic update checks are unavailable: ${error.message}`); }
     console.log('✓ muxox binary installed successfully');
   } catch (error) {
     console.error('Failed to install muxox binary:', error.message);

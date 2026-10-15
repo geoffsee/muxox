@@ -22,6 +22,7 @@
   },
   "scripts": {
     "postinstall": "node install.js",
+    "test": "node test/manager.test.js",
     "sync-version": "node sync-version.js"
   },
   "engines": {

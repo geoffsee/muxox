@@ -1,78 +1,48 @@
 #!/usr/bin/env node
+'use strict';
 
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
-const { getLatestVersion, compareVersions, updateBinary } = require('../lib/updater');
-
-// Determine the binary name based on platform
-const binaryName = process.platform === 'win32' ? 'muxox.exe' : 'muxox';
-const binaryPath = path.join(__dirname, binaryName);
-
-// Check if binary exists
+const os = require('os');
+// Load before the manager replaces this package on disk.
+const { HANDOFF_EXIT, update } = require('../lib/manager');
+const binaryPath = path.join(__dirname, process.platform === 'win32' ? 'muxox.exe' : 'muxox');
 if (!fs.existsSync(binaryPath)) {
-  console.error('Error: muxox binary not found.');
-  console.error('Please try reinstalling the package: npm install muxox');
+  console.error('Muxox binary not found. Reinstall with your original package manager.');
   process.exit(1);
 }
-
-async function checkForUpdates() {
+const args = process.argv.slice(2);
+const updating = args.includes('update');
+const temp = updating ? fs.mkdtempSync(path.join(os.tmpdir(), 'muxox-update-')) : null;
+const requestPath = temp ? path.join(temp, 'request.json') : null;
+const env = { ...process.env, MUXOX_NODE_EXEC_PATH: process.execPath, MUXOX_INVOKE_CWD: process.cwd() };
+delete env.MUXOX_UPDATE_REQUEST;
+if (requestPath) env.MUXOX_UPDATE_REQUEST = requestPath;
+const child = spawn(binaryPath, args, { stdio: 'inherit', env, windowsHide: false });
+const interrupt = () => child.kill('SIGINT'), terminate = () => child.kill('SIGTERM');
+process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
+function cleanup() {
+  process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
+  if (temp) { try { fs.unlinkSync(requestPath); } catch (_) {} try { fs.rmdirSync(temp); } catch (_) {} }
+}
+child.on('error', error => { cleanup(); console.error('Failed to start muxox:', error.message); process.exitCode = 1; });
+child.on('close', async (code, signal) => {
+  process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', terminate);
   try {
-    const packageJson = require('../package.json');
-    const currentVersion = packageJson.version;
-    
-    // Check for latest version from GitHub
-    const latestVersion = await getLatestVersion();
-    
-    if (latestVersion && compareVersions(latestVersion, currentVersion) > 0) {
-      console.log(`\n🔄 New version available: ${latestVersion} (current: ${currentVersion})`);
-      console.log('Downloading update...\n');
-      
-      const binDir = __dirname;
-      await updateBinary(latestVersion, binDir);
-      
-      console.log(`✓ Updated to version ${latestVersion}\n`);
-      
-      // Update package.json version
-      packageJson.version = latestVersion;
-      fs.writeFileSync(
-        path.join(__dirname, '..', 'package.json'),
-        JSON.stringify(packageJson, null, 2) + '\n'
-      );
-    }
+    if (code === HANDOFF_EXIT && updating && fs.existsSync(requestPath)) {
+      const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+      const result = spawnSync(binaryPath, ['--version'], { encoding: 'utf8', timeout: 5000 });
+      if (result.error || result.status !== 0) throw new Error('Cannot verify the installed native executable.');
+      const version = result.stdout.trim().replace(/^muxox /, '');
+      await update(request, path.resolve(__dirname, '..'), version);
+      process.exitCode = 0;
+    } else if (signal) { cleanup(); process.kill(process.pid, signal); }
+    else process.exitCode = code === null ? 1 : code;
   } catch (error) {
-    // Silently fail - don't block execution if update check fails
+    console.error(error.message);
+    if (error.signal) { cleanup(); process.kill(process.pid, error.signal); }
+    else process.exitCode = error.exitCode || 1;
   }
-}
-
-function runBinary() {
-  // Forward all arguments to the binary
-  const args = process.argv.slice(2);
-
-  // Spawn the binary process
-  const child = spawn(binaryPath, args, {
-    stdio: 'inherit',
-    windowsHide: false
-  });
-
-  // Forward exit code
-  child.on('exit', (code, signal) => {
-    if (signal) {
-      process.kill(process.pid, signal);
-    } else {
-      process.exit(code);
-    }
-  });
-
-  // Handle errors
-  child.on('error', (err) => {
-    console.error('Failed to start muxox:', err.message);
-    process.exit(1);
-  });
-}
-
-// Check for updates then run binary
-checkForUpdates().then(runBinary).catch(() => {
-  // If update check fails, still run the binary
-  runBinary();
+  finally { cleanup(); }
 });

@@ -31,23 +31,6 @@ function getPlatformInfo() {
   return info;
 }
 
-function httpsGet(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, { headers: { 'User-Agent': 'muxox-updater' } }, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
-        // Follow redirect
-        httpsGet(response.headers.location).then(resolve).catch(reject);
-      } else if (response.statusCode === 200) {
-        let data = '';
-        response.on('data', chunk => data += chunk);
-        response.on('end', () => resolve({ statusCode: response.statusCode, data }));
-      } else {
-        resolve({ statusCode: response.statusCode, data: null });
-      }
-    }).on('error', reject);
-  });
-}
-
 function download(url, dest) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(dest);
@@ -107,35 +90,6 @@ function extractZip(archivePath, destDir) {
   }
 }
 
-async function getLatestVersion() {
-  try {
-    const response = await httpsGet(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`);
-    
-    if (response.statusCode === 200) {
-      const release = JSON.parse(response.data);
-      return release.tag_name.replace(/^v/, ''); // Remove 'v' prefix
-    }
-    return null;
-  } catch (error) {
-    return null;
-  }
-}
-
-function compareVersions(v1, v2) {
-  const parts1 = v1.split('.').map(Number);
-  const parts2 = v2.split('.').map(Number);
-  
-  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-    const part1 = parts1[i] || 0;
-    const part2 = parts2[i] || 0;
-    
-    if (part1 > part2) return 1;
-    if (part1 < part2) return -1;
-  }
-  
-  return 0;
-}
-
 async function updateBinary(version, binDir) {
   try {
     const platformInfo = getPlatformInfo();
@@ -180,8 +134,6 @@ module.exports = {
   download,
   extractTarGz,
   extractZip,
-  getLatestVersion,
-  compareVersions,
   updateBinary,
   GITHUB_REPO
 };

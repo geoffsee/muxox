@@ -1,6 +1,13 @@
 (function () {
     "use strict";
 
+    function showUpdate(update) {
+        const banner = document.getElementById("update-notice");
+        banner.hidden = !update;
+        banner.textContent = update
+            ? `Muxox ${update.latest_version} is available (current: ${update.current_version}). Run \`muxox update\`.`
+            : "";
+    }
     const container = document.getElementById("container");
     const statusEl = document.getElementById("connection-status");
     const MAX_LOG_LINES = 2000;
@@ -53,7 +60,11 @@
 
     function handleMessage(msg) {
         switch (msg.type) {
+            case "UpdateAvailable":
+                showUpdate(msg.update);
+                break;
             case "Init":
+                showUpdate(msg.update);
                 mountShells(msg.services.map((s, i) => createServiceBox(s, i)));
                 break;
             case "Log":

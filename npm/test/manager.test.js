@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const manager = require('../lib/manager');
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'muxox-manager-test-')));
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'muxox-manager-test-')));
 const write = (file, content) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, typeof content === 'string' ? content : JSON.stringify(content)); };
 const project = path.join(root, 'project with spaces');
 const packageRoot = path.join(project, 'node_modules', 'muxox');

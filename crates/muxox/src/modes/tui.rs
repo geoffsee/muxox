@@ -100,29 +100,28 @@ pub(crate) fn tui_root() -> Element {
         ViewNode::HelpBar(HelpBarNode { bindings })
     };
 
-    // Optionally add input bar above the help bar
-    let root = if app.input_mode {
-        let input_bar = ViewNode::InputBar(InputBarNode {
+    let mut children = vec![main];
+    let mut constraints = vec![Constraint::Min(1)];
+    if app.input_mode {
+        children.push(ViewNode::InputBar(InputBarNode {
             title: format!(
                 " Input for {} (Enter to send, Esc to cancel) ",
                 selected_service.cfg.name
             ),
             text: app.input_buffer.clone(),
-        });
-        ViewNode::Column(ColumnNode {
-            children: vec![main, input_bar, help],
-            constraints: vec![
-                Constraint::Min(1),
-                Constraint::Length(3),
-                Constraint::Length(1),
-            ],
-        })
-    } else {
-        ViewNode::Column(ColumnNode {
-            children: vec![main, help],
-            constraints: vec![Constraint::Min(1), Constraint::Length(1)],
-        })
-    };
+        }));
+        constraints.push(Constraint::Length(3));
+    }
+    if let Some(notice) = &app.update_notice {
+        children.push(ViewNode::Notice(notice.to_string()));
+        constraints.push(Constraint::Length(1));
+    }
+    children.push(help);
+    constraints.push(Constraint::Length(1));
+    let root = ViewNode::Column(ColumnNode {
+        children,
+        constraints,
+    });
 
     *view_out.borrow_mut() = root;
 
@@ -151,6 +150,7 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
     local
         .run_until(async move {
             let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
+            muxox_core::updates::spawn_update_check(tx.clone());
             let app = App {
                 services: cfg.service.into_iter().map(ServiceState::new).collect(),
                 selected: 0,
@@ -159,6 +159,7 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
                 input_mode: false,
                 input_buffer: String::new(),
                 isolation: default_isolation(),
+                update_notice: None,
             };
 
             // Signal watcher (spawns on the tokio runtime, not the LocalSet)

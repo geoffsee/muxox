@@ -30,6 +30,10 @@ pub fn render_view(f: &mut Frame, area: Rect, node: &ViewNode) {
         ViewNode::Text(text) => render_text(f, area, text),
         ViewNode::InputBar(input) => render_input_bar(f, area, input),
         ViewNode::HelpBar(help) => render_help_bar(f, area, help),
+        ViewNode::Notice(text) => f.render_widget(
+            Paragraph::new(text.as_str()).style(Style::default().fg(Color::Yellow)),
+            area,
+        ),
         ViewNode::Empty => {}
     }
 }

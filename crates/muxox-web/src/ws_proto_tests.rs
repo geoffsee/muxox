@@ -9,6 +9,7 @@ mod tests {
     #[test]
     fn init_message_serializes_with_type_tag() {
         let msg = WsOutbound::Init {
+            update: None,
             services: vec![ServiceInfo {
                 name: "web".into(),
                 status: "Running".into(),
@@ -147,6 +148,7 @@ mod tests {
     #[test]
     fn init_with_multiple_services() {
         let msg = WsOutbound::Init {
+            update: None,
             services: vec![
                 ServiceInfo {
                     name: "web".into(),
@@ -171,4 +173,23 @@ mod tests {
         assert_eq!(json["services"].as_array().unwrap().len(), 2);
         assert_eq!(json["services"][1]["interactive"], true);
     }
+}
+
+#[test]
+fn update_notice_survives_initial_and_live_serialization() {
+    use crate::ws_proto::WsOutbound;
+    use muxox_core::updates::UpdateNotice;
+    let notice = UpdateNotice {
+        current_version: "1.0.0".into(),
+        latest_version: "2.0.0".into(),
+    };
+    let initial = serde_json::to_value(WsOutbound::Init {
+        services: vec![],
+        update: Some(notice.clone()),
+    })
+    .unwrap();
+    let live = serde_json::to_value(WsOutbound::UpdateAvailable { update: notice }).unwrap();
+    assert_eq!(initial["update"], live["update"]);
+    assert_eq!(initial["update"]["latest_version"], "2.0.0");
+    assert_eq!(live["type"], "UpdateAvailable");
 }

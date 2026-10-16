@@ -378,3 +378,11 @@ body.is-resizing-row * {
     cursor: row-resize !important;
     user-select: none !important;
 }
+#update-notice {
+    flex-shrink: 0;
+    padding: 8px 16px;
+    background: #332d1b;
+    color: #f5d782;
+    font-size: 13px;
+    border-bottom: 1px solid #66552a;
+}

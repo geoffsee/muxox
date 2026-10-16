@@ -10,6 +10,7 @@ use ratatui::text::Line;
 /// A terminal-native node in the view tree.
 #[derive(Clone, Debug)]
 pub enum ViewNode {
+    Notice(String),
     Row(RowNode),
     Column(ColumnNode),
     StyledList(StyledListNode),

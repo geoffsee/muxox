@@ -26,6 +26,7 @@ fn test_app(cfgs: Vec<ServiceCfg>) -> App {
         input_mode: false,
         input_buffer: String::new(),
         isolation: default_isolation(),
+        update_notice: None,
     }
 }
 
@@ -205,4 +206,23 @@ fn multiple_services_independent_state() {
     assert_eq!(app.services[2].status, Status::Running);
     assert_eq!(app.services[1].log.len(), 1);
     assert!(app.services[0].log.is_empty());
+}
+
+#[test]
+fn update_notice_retains_service_state_and_input() {
+    let mut app = test_app(vec![test_cfg("svc", true)]);
+    app.input_mode = true;
+    app.input_buffer = "in progress".into();
+    apply_msg(&mut app, AppMsg::Started(0));
+    apply_msg(&mut app, AppMsg::Log(0, "ready".into()));
+    let notice = muxox_core::updates::UpdateNotice {
+        current_version: "1.0.0".into(),
+        latest_version: "2.0.0".into(),
+    };
+    apply_msg(&mut app, AppMsg::UpdateAvailable(notice.clone()));
+    assert_eq!(app.update_notice, Some(notice));
+    assert_eq!(app.services[0].status, Status::Running);
+    assert_eq!(app.services[0].log[0], "ready");
+    assert!(app.input_mode);
+    assert_eq!(app.input_buffer, "in progress");
 }

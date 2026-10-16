@@ -68,6 +68,7 @@ impl ServiceState {
 }
 
 pub struct App {
+    pub update_notice: Option<crate::updates::UpdateNotice>,
     pub services: Vec<ServiceState>,
     pub selected: usize,
     // Number of lines from the end of the log to offset when rendering.
@@ -95,6 +96,7 @@ impl std::fmt::Debug for App {
 
 #[derive(Debug, Clone)]
 pub enum AppMsg {
+    UpdateAvailable(crate::updates::UpdateNotice),
     Started(usize),
     Stopped(usize, i32),
     Log(usize, String),
@@ -278,6 +280,7 @@ pub fn stop_service(idx: usize, app: &mut App) {
 
 pub fn apply_msg(app: &mut App, msg: AppMsg) {
     match msg {
+        AppMsg::UpdateAvailable(notice) => app.update_notice = Some(notice),
         AppMsg::Started(idx) => {
             crate::log::debug(&format!("apply_msg: Started idx={idx}"));
             app.services[idx].status = Status::Running;

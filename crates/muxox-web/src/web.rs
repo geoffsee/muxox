@@ -31,6 +31,7 @@ use tokio::task;
 pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     let Config { service, mcp, .. } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
+    muxox_core::updates::spawn_update_check(tx.clone());
     // Bytes rather than Vec<u8>: broadcast clones the value once per
     // receiver, and cloning Bytes is a refcount bump instead of a full copy
     // of the frame for every connected client.
@@ -44,6 +45,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
         input_mode: false,
         input_buffer: String::new(),
         isolation: default_isolation(),
+        update_notice: None,
     }));
 
     // Start all services
@@ -76,6 +78,9 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
             apply_msg(&mut app_lock, msg.clone());
 
             let ws_msg = match &msg {
+                AppMsg::UpdateAvailable(update) => Some(WsOutbound::UpdateAvailable {
+                    update: update.clone(),
+                }),
                 AppMsg::Log(idx, line) => Some(WsOutbound::Log {
                     idx: *idx,
                     line: line.clone(),
@@ -159,7 +164,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<WebState>) {
                 interactive: s.cfg.interactive,
             })
             .collect();
-        let init_msg = WsOutbound::Init { services };
+        let init_msg = WsOutbound::Init {
+            services,
+            update: app.update_notice.clone(),
+        };
         if let Err(e) = sender.send(init_msg.to_message()).await {
             eprintln!("Failed to send init msg: {}", e);
             return;

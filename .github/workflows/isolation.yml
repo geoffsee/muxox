@@ -48,3 +48,17 @@ jobs:
       - name: Run all workspace tests
         shell: bash
         run: cargo test --workspace --all-features
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Package-manager and launcher tests
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            export MUXOX_TEST_BINARY="$(cygpath -w "$PWD/target/debug/muxox.exe")"
+          else
+            export MUXOX_TEST_BINARY="$PWD/target/debug/muxox"
+          fi
+          node npm/test/manager.test.js

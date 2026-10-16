@@ -16,6 +16,7 @@ use tokio::task;
 pub async fn run_raw_mode(cfg: Config) -> Result<()> {
     let Config { service, mcp, .. } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
+    muxox_core::updates::spawn_update_check(tx.clone());
     let app = Arc::new(Mutex::new(App {
         services: service.into_iter().map(ServiceState::new).collect(),
         selected: 0,
@@ -24,6 +25,7 @@ pub async fn run_raw_mode(cfg: Config) -> Result<()> {
         input_mode: false,
         input_buffer: String::new(),
         isolation: default_isolation(),
+        update_notice: None,
     }));
 
     // Signal watcher: on any exit signal, nuke children then exit.
@@ -50,6 +52,13 @@ pub async fn run_raw_mode(cfg: Config) -> Result<()> {
     // Process messages and output logs
     loop {
         match rx.recv().await {
+            Some(AppMsg::UpdateAvailable(notice)) => {
+                let mut guard = app.lock().await;
+                if guard.update_notice.is_none() {
+                    eprintln!("{notice}");
+                }
+                guard.update_notice = Some(notice);
+            }
             Some(AppMsg::Log(idx, line)) => {
                 let mut guard = app.lock().await;
                 let service_name = guard.services[idx].cfg.name.clone();

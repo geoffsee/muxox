@@ -14,6 +14,7 @@ pub fn App() -> Element {
                 div { class: "logo", "muxox" }
                 div { id: "connection-status", "Connecting\u{2026}" }
             }
+            div { id: "update-notice", role: "status", hidden: true }
             div { id: "container" }
             script { dangerous_inner_html: include_str!("web_script.js") }
         }

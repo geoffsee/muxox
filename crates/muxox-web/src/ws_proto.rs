@@ -6,9 +6,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum WsOutbound {
-    Init { services: Vec<ServiceInfo> },
-    Log { idx: usize, line: String },
-    Status { idx: usize, status: String },
+    Init {
+        services: Vec<ServiceInfo>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        update: Option<muxox_core::updates::UpdateNotice>,
+    },
+    UpdateAvailable {
+        update: muxox_core::updates::UpdateNotice,
+    },
+    Log {
+        idx: usize,
+        line: String,
+    },
+    Status {
+        idx: usize,
+        status: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

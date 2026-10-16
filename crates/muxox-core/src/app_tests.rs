@@ -32,6 +32,7 @@ mod tests {
             input_mode: false,
             input_buffer: String::new(),
             isolation: default_isolation(),
+            update_notice: None,
         }
     }
 
@@ -94,6 +95,7 @@ mod tests {
             input_mode: false,
             input_buffer: String::new(),
             isolation: default_isolation(),
+            update_notice: None,
         };
 
         for i in 0..5 {

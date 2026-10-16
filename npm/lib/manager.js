@@ -9,7 +9,7 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const RECEIPT = '.muxox-install.json';
 const HANDOFF_EXIT = 75;
 const real = p => {
-  const resolved = fs.realpathSync(p);
+  const resolved = fs.realpathSync.native(p);
   // Rust's canonical Windows cwd can retain the extended-length prefix.
   // Use the same spelling as receipts recorded by the package manager.
   if (process.platform === 'win32') {

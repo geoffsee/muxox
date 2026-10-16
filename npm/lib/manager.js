@@ -8,7 +8,16 @@ const { spawn, spawnSync } = require('child_process');
 const PACKAGE_ROOT = path.resolve(__dirname, '..');
 const RECEIPT = '.muxox-install.json';
 const HANDOFF_EXIT = 75;
-const real = p => fs.realpathSync(p);
+const real = p => {
+  const resolved = fs.realpathSync(p);
+  // Rust's canonical Windows cwd can retain the extended-length prefix.
+  // Use the same spelling as receipts recorded by the package manager.
+  if (process.platform === 'win32') {
+    if (resolved.startsWith('\\\\?\\UNC\\')) return '\\\\' + resolved.slice(8);
+    if (/^\\\\\?\\[A-Za-z]:\\/.test(resolved)) return resolved.slice(4);
+  }
+  return resolved;
+};
 const readJson = p => JSON.parse(fs.readFileSync(p, 'utf8'));
 const inside = (root, p) => { const rel = path.relative(root, p); return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel)); };
 const temporary = p => /(?:^|[\\/])(?:_npx|dlx|bunx)(?:[\\/]|$)|[\\/](?:bunx|dlx)-/.test(p);

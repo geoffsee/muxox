@@ -34,6 +34,9 @@ async function main() {
     assert.equal(manager.loadReceipt(packageRoot).manager.name, 'npm');
     assert.deepEqual(manager.ownerContext(receipt, project), { cwd: project, section: 'devDependencies' });
   });
+  if (process.platform === 'win32') test('loads the same receipt through a canonical Windows path', () => {
+    assert.deepEqual(manager.loadReceipt(path.toNamespacedPath(packageRoot)), receipt);
+  });
   test('selects the invoking workspace without changing other workspaces', () => {
     const workspace = path.join(project, 'packages', 'app');
     write(path.join(workspace, 'package.json'), { dependencies: { muxox: '^1.0.0' } });

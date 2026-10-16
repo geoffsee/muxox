@@ -251,7 +251,10 @@ pub async fn latest_update(
             runtime,
         } => {
             let mut cmd = Command::new(runtime);
-            cmd.arg(package_root.join("lib/manager.js"))
+            // canonicalize() produces verbatim paths on Windows (\\?\...),
+            // which Node cannot resolve as a script entry point. Resolve the
+            // helper relative to the package directory instead.
+            cmd.arg("lib/manager.js")
                 .arg("check")
                 .current_dir(package_root);
             let output = capture_command(cmd, timeout).await?;

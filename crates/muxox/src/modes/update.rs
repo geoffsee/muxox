@@ -124,6 +124,14 @@ fn asset_name() -> Result<&'static str> {
     }
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    // sha2 0.11 digests no longer implement LowerHex.
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn verify_digest(bytes: &[u8], digest: Option<&str>) -> Result<()> {
     let expected = digest
         .and_then(|s| s.strip_prefix("sha256:"))
@@ -133,7 +141,7 @@ fn verify_digest(bytes: &[u8], digest: Option<&str>) -> Result<()> {
         "Invalid release checksum"
     );
     ensure!(
-        format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(expected),
+        sha256_hex(bytes).eq_ignore_ascii_case(expected),
         "Release checksum mismatch; the installed executable was not changed"
     );
     Ok(())
@@ -347,7 +355,7 @@ mod tests {
         assert!(
             verify_digest(
                 b"binary",
-                Some(&format!("sha256:{:x}", Sha256::digest(b"binary")))
+                Some(&format!("sha256:{}", sha256_hex(b"binary")))
             )
             .is_ok()
         );

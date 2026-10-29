@@ -104,10 +104,7 @@ pub fn run_hook_sync(
     let code = match child.wait() {
         Ok(status) => status.code().unwrap_or(-1),
         Err(e) => {
-            log(format!(
-                "[WARN] hook {} wait failed: {e}",
-                phase.as_str()
-            ));
+            log(format!("[WARN] hook {} wait failed: {e}", phase.as_str()));
             -1
         }
     };
@@ -185,10 +182,7 @@ pub async fn run_hook_async(
     let code = match wait_result {
         Ok(s) => s.code().unwrap_or(-1),
         Err(e) => {
-            log(format!(
-                "[WARN] hook {} wait failed: {e}",
-                phase.as_str()
-            ));
+            log(format!("[WARN] hook {} wait failed: {e}", phase.as_str()));
             -1
         }
     };
@@ -228,11 +222,10 @@ mod tests {
     #[tokio::test]
     async fn async_hook_success() {
         let mut lines = Vec::new();
-        let code =
-            run_hook_async(HookPhase::AfterStart, "echo async-ok", None, None, |l| {
-                lines.push(l)
-            })
-            .await;
+        let code = run_hook_async(HookPhase::AfterStart, "echo async-ok", None, None, |l| {
+            lines.push(l)
+        })
+        .await;
         assert_eq!(code, 0);
         assert!(lines.iter().any(|l| l.contains("async-ok")));
     }

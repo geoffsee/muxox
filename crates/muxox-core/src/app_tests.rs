@@ -289,10 +289,7 @@ mod tests {
         use crate::app::start_all;
         use crate::config::HooksCfg;
 
-        let marker = std::env::temp_dir().join(format!(
-            "muxox_hook_order_{}",
-            std::process::id()
-        ));
+        let marker = std::env::temp_dir().join(format!("muxox_hook_order_{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
 
         let (tx, mut rx) = mpsc::unbounded_channel();
@@ -321,7 +318,8 @@ mod tests {
 
         let logs: Vec<String> = app.services[0].log.iter().cloned().collect();
         assert!(
-            logs.iter().any(|l| l.contains("[hooks]") && l.contains("boot-pre")),
+            logs.iter()
+                .any(|l| l.contains("[hooks]") && l.contains("boot-pre")),
             "global before_start should appear in service logs: {logs:?}"
         );
         assert!(
@@ -343,7 +341,10 @@ mod tests {
         let contents = std::fs::read_to_string(&marker).expect("marker written");
         let pre = contents.find("boot-pre").expect("boot-pre present");
         let post = contents.find("boot-post").expect("boot-post present");
-        assert!(pre < post, "global before_start should run before after_start");
+        assert!(
+            pre < post,
+            "global before_start should run before after_start"
+        );
         let _ = std::fs::remove_file(&marker);
     }
 }

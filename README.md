@@ -123,20 +123,53 @@ JavaScript package-manager installations.
 
 ## Configuration
 
+Top-level options:
+
+- name: Display name for the web UI header and page title (optional; default `muxox`)
+- muxox_version: Semver range the running muxox binary must satisfy (optional)
+- hooks: Global lifecycle hooks run once at boot / shutdown (optional; see below)
+- mcp: Embedded MCP server settings (optional; see below)
+
 Each service supports:
 
 - name: Unique identifier (required)
 - cmd: Command to run (required)
-- cwd: Working directory (optional, defaults to current dir)
+- cwd: Working directory (optional, defaults to current dir). Relative paths resolve from the config file's directory.
 - interactive: Whether the service requires stdin (optional, default: false)
 - pty: Whether to allocate a PTY for the service (Unix only, optional, default: false)
 - log_capacity: How many log lines to keep in memory (optional, default 2000)
 - env_file: Path to a `.env` file whose KEY=VALUE pairs are injected into the service's environment (optional)
 - isolation: Per-service sandboxing settings (optional, see below)
+- hooks: Per-service lifecycle hooks (optional, see below)
 
 Tips:
 - Use cwd to run commands from anywhere.
 - Pick log_capacity large enough to cover your typical debugging session, but not so large that it eats RAM.
+
+### Lifecycle hooks
+
+Optional shell commands around start/stop. Declare a top-level `[hooks]` table for once-per-boot / once-per-shutdown commands, and/or `hooks` on each `[[service]]`.
+
+| Phase | Service | Global |
+|-------|---------|--------|
+| `before_start` | Before spawning the service | Once before any service starts |
+| `after_start` | After successful spawn | Once after every boot start has settled |
+| `before_stop` | Before explicit stop/kill | Once before shutdown kills |
+| `after_stop` | After the process exits | Once after shutdown kills |
+
+Non-zero hook exits log a warning and continue. Service hooks inherit that service's `cwd` and `env_file` and write into that service's log pane. Global hooks run with the config file's directory as cwd, also appear in every service pane (prefixed with `[hooks]`), and on muxox's stderr. `before_stop` does not run on natural process exit; `after_stop` always does when the process exits. Global hooks do not re-run on individual service restart.
+
+```toml
+[hooks]
+before_start = "./scripts/boot-pre.sh"
+after_stop   = "./scripts/shutdown-post.sh"
+
+[[service]]
+name = "api"
+cmd = "bun run dev"
+cwd = "./packages/api"
+hooks = { before_start = "./scripts/api-pre.sh", after_stop = "./scripts/api-cleanup.sh" }
+```
 
 ### Isolation
 

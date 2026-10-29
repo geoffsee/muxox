@@ -336,6 +336,7 @@ mod tests {
                 pty: false,
                 env_file: None,
                 isolation: Default::default(),
+                hooks: Default::default(),
             });
             s.status = Status::Running;
             for l in logs {
@@ -352,6 +353,9 @@ mod tests {
             input_buffer: String::new(),
             isolation: default_isolation(),
             update_notice: None,
+            hooks: Default::default(),
+            config_dir: None,
+            settle_tx: None,
         }))
     }
 

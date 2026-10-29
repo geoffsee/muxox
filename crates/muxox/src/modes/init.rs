@@ -23,6 +23,11 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 # ---------------------------------------------------------------------------
 # Top-level fields
 # ---------------------------------------------------------------------------
+# name (string, optional) Display name shown in the web UI header and page
+#                         title.  Defaults to "muxox" when omitted.
+#
+# name = "My Project"
+#
 # muxox_version (string,  optional) Semver range the running `muxox` binary
 #                                   must satisfy.  Examples: ">=1.4, <2.0",
 #                                   "^1.4", "~1.4.2", "=1.4.0".  Loading the
@@ -32,16 +37,37 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 # muxox_version = ">=1.4, <2.0"
 #
 # ---------------------------------------------------------------------------
+# Global lifecycle hooks (optional `[hooks]` table)
+# ---------------------------------------------------------------------------
+# Shell commands run once at Muxox boot / shutdown.  A non-zero exit logs a
+# warning and continues (services still start/stop).  Commands run with the
+# config file's directory as cwd, so `./scripts/...` is relative to the TOML.
+#
+# before_start  before any service is started
+# after_start   after every boot start attempt has settled (spawn ok or fail)
+# before_stop   before services are killed on shutdown
+# after_stop    after services are killed on shutdown
+#
+# [hooks]
+# before_start = "./scripts/boot-pre.sh"
+# after_start  = "./scripts/boot-post.sh"
+# before_stop  = "./scripts/shutdown-pre.sh"
+# after_stop   = "./scripts/shutdown-post.sh"
+#
+# ---------------------------------------------------------------------------
 # Field reference (per `[[service]]`)
 # ---------------------------------------------------------------------------
 # name          (string,  required) Unique identifier shown in the UI.
 # cmd           (string,  required) Shell command to execute.
 # cwd           (path,    optional) Working directory for the command.
+#               Relative paths resolve from the config file's directory.
 # log_capacity  (int,     optional) Lines kept in memory.  Default: 2000.
 # interactive   (bool,    optional) Service consumes stdin.  Default: false.
 # pty           (bool,    optional) Allocate a PTY (Unix only).  Default: false.
-# env_file      (path,    optional) `.env` file injected into the environment.
+# env_file      (path,    optional) `.env` file injected into the environment
+#               (relative paths resolve from the config file's directory).
 # isolation     (table,   optional) Per-service sandboxing flags (see below).
+# hooks         (table,   optional) Per-service lifecycle hooks (see below).
 #
 # ---------------------------------------------------------------------------
 # Minimal example -- the smallest valid service definition.
@@ -99,6 +125,18 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 # process    = true
 # filesystem = true
 # network    = true
+#
+# ---------------------------------------------------------------------------
+# Per-service lifecycle hooks.  Same four phases as global hooks.  Service
+# hooks inherit the service `cwd` and `env_file`.  `before_stop` runs only on
+# explicit stop/shutdown (not natural process exit); `after_stop` always runs
+# when the process exits.  Failures warn and continue.
+# ---------------------------------------------------------------------------
+# [[service]]
+# name = "api"
+# cmd  = "bun run dev"
+# cwd  = "./packages/api"
+# hooks = { before_start = "./scripts/api-pre.sh", after_stop = "./scripts/api-cleanup.sh" }
 #
 # ---------------------------------------------------------------------------
 # Optional embedded MCP (Model Context Protocol) server.

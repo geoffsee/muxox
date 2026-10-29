@@ -2,13 +2,15 @@
 // Copyright (c) 2025 Geoff Seemueller
 // This file is part of muxox, released under the MIT License.
 
-use crate::config::ServiceCfg;
+use crate::config::{HooksCfg, ServiceCfg};
+use crate::hooks::{HookPhase, run_hook_async, run_hook_sync};
 use crate::isolation::Isolation;
 #[cfg(unix)]
 use crate::utils::{interactive_args, interactive_program};
 use crate::utils::{shell_exec, shell_flag, shell_program};
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -79,6 +81,12 @@ pub struct App {
     pub input_mode: bool,
     pub input_buffer: String,
     pub isolation: Arc<dyn Isolation>,
+    /// Global lifecycle hooks from `[hooks]` in muxox.toml.
+    pub hooks: HooksCfg,
+    /// Directory of the loaded config; global hooks run with this as cwd.
+    pub config_dir: Option<PathBuf>,
+    /// Optional settle notifications for [`start_all`] boot coordination.
+    pub settle_tx: Option<mpsc::UnboundedSender<usize>>,
 }
 
 impl std::fmt::Debug for App {
@@ -90,6 +98,8 @@ impl std::fmt::Debug for App {
             .field("input_mode", &self.input_mode)
             .field("input_buffer", &self.input_buffer)
             .field("isolation", &self.isolation)
+            .field("hooks", &self.hooks)
+            .field("config_dir", &self.config_dir)
             .finish()
     }
 }
@@ -103,7 +113,38 @@ pub enum AppMsg {
     ChildSpawned(usize, u32),
     StdinReady(usize, mpsc::Sender<String>),
     StdinWriterReady(usize, Arc<Mutex<ChildStdin>>),
+    /// Start attempt finished (after before_start + spawn + after_start).
+    SpawnSettled(usize),
     AbortedAll,
+}
+
+/// Mirror a global hook line to stderr and every service log buffer so web/TUI
+/// panes show `[hooks]` output (global hooks have no dedicated pane).
+fn log_global_hook(app: &mut App, line: String) {
+    eprintln!("[hooks] {line}");
+    for svc in &mut app.services {
+        svc.push_log(format!("[hooks] {line}"));
+    }
+}
+
+fn run_service_before_stop(idx: usize, app: &mut App) {
+    let Some(cmd) = app.services[idx].cfg.hooks.before_stop.clone() else {
+        return;
+    };
+    let cwd = app.services[idx].cfg.cwd.clone();
+    let env_file = app.services[idx].cfg.env_file.clone();
+    let tx = app.tx.clone();
+    run_hook_sync(
+        HookPhase::BeforeStop,
+        &cmd,
+        cwd.as_deref(),
+        env_file.as_deref(),
+        |line| {
+            // Route through AppMsg so web/raw can live-broadcast; apply_msg
+            // pushes into the service buffer when the mode loop drains it.
+            let _ = tx.send(AppMsg::Log(idx, line));
+        },
+    );
 }
 
 pub fn start_service(idx: usize, app: &mut App) {
@@ -116,10 +157,32 @@ pub fn start_service(idx: usize, app: &mut App) {
     ));
     app.services[idx].status = Status::Starting;
     let tx = app.tx.clone();
+    let settle_tx = app.settle_tx.clone();
     let sc = app.services[idx].cfg.clone();
     let isolation = app.isolation.clone();
 
     task::spawn(async move {
+        let notify_settled = || {
+            if let Some(ref stx) = settle_tx {
+                let _ = stx.send(idx);
+            }
+            let _ = tx.send(AppMsg::SpawnSettled(idx));
+        };
+
+        if let Some(ref hook) = sc.hooks.before_start {
+            let tx_log = tx.clone();
+            run_hook_async(
+                HookPhase::BeforeStart,
+                hook,
+                sc.cwd.as_deref(),
+                sc.env_file.as_deref(),
+                |line| {
+                    let _ = tx_log.send(AppMsg::Log(idx, line));
+                },
+            )
+            .await;
+        }
+
         // Build command; optionally wrap interactive with a PTY when requested
         #[cfg(unix)]
         let mut cmd = {
@@ -182,10 +245,24 @@ pub fn start_service(idx: usize, app: &mut App) {
                 let pid = child.id().unwrap_or_default();
                 crate::log::debug(&format!("[task idx={idx}] spawned pid={pid}"));
                 isolation.post_spawn(pid, &sc);
-                let _ = tx.send(AppMsg::Started(idx));
 
-                // Send the child handle back to be stored
+                if let Some(ref hook) = sc.hooks.after_start {
+                    let tx_log = tx.clone();
+                    run_hook_async(
+                        HookPhase::AfterStart,
+                        hook,
+                        sc.cwd.as_deref(),
+                        sc.env_file.as_deref(),
+                        |line| {
+                            let _ = tx_log.send(AppMsg::Log(idx, line));
+                        },
+                    )
+                    .await;
+                }
+
+                let _ = tx.send(AppMsg::Started(idx));
                 let _ = tx.send(AppMsg::ChildSpawned(idx, pid));
+                notify_settled();
 
                 // For interactive services, setup stdin forwarding
                 if sc.interactive {
@@ -228,11 +305,27 @@ pub fn start_service(idx: usize, app: &mut App) {
                 // Waiter
                 let status = child.wait().await; // process exit
                 let code = status.map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+
+                if let Some(ref hook) = sc.hooks.after_stop {
+                    let tx_log = tx.clone();
+                    run_hook_async(
+                        HookPhase::AfterStop,
+                        hook,
+                        sc.cwd.as_deref(),
+                        sc.env_file.as_deref(),
+                        |line| {
+                            let _ = tx_log.send(AppMsg::Log(idx, line));
+                        },
+                    )
+                    .await;
+                }
+
                 let _ = tx.send(AppMsg::Stopped(idx, code));
             }
             Err(e) => {
                 crate::log::debug(&format!("[task idx={idx}] spawn FAILED: {e}"));
                 let _ = tx.send(AppMsg::Log(idx, format!("spawn failed: {e}")));
+                notify_settled();
                 let _ = tx.send(AppMsg::Stopped(idx, -1));
             }
         }
@@ -275,6 +368,7 @@ pub fn stop_service(idx: usize, app: &mut App) {
         return;
     }
     app.services[idx].status = Status::Stopping;
+    run_service_before_stop(idx, app);
     kill_tree(idx, app);
 }
 
@@ -306,9 +400,104 @@ pub fn apply_msg(app: &mut App, msg: AppMsg) {
         AppMsg::StdinWriterReady(idx, writer) => {
             app.services[idx].stdin_writer = Some(writer);
         }
+        AppMsg::SpawnSettled(_) => {
+            // Handled by start_all via settle_tx; no App state change.
+        }
         AppMsg::AbortedAll => {
             // Handled by the main loop
         }
+    }
+}
+
+/// Run global `before_start`, start every service, wait until each start
+/// attempt has settled, then run global `after_start`.
+pub async fn start_all(app: &mut App) {
+    let hook_cwd = app.config_dir.clone();
+    if let Some(ref hook) = app.hooks.before_start.clone() {
+        run_hook_sync(
+            HookPhase::BeforeStart,
+            hook,
+            hook_cwd.as_deref(),
+            None,
+            |line| {
+                log_global_hook(app, line);
+            },
+        );
+    }
+
+    let n = app.services.len();
+    let (settle_tx, mut settle_rx) = mpsc::unbounded_channel();
+    app.settle_tx = Some(settle_tx);
+
+    for idx in 0..n {
+        start_service(idx, app);
+    }
+
+    for _ in 0..n {
+        if settle_rx.recv().await.is_none() {
+            break;
+        }
+    }
+    app.settle_tx = None;
+
+    if let Some(ref hook) = app.hooks.after_start.clone() {
+        run_hook_sync(
+            HookPhase::AfterStart,
+            hook,
+            hook_cwd.as_deref(),
+            None,
+            |line| {
+                log_global_hook(app, line);
+            },
+        );
+    }
+}
+
+/// Apply any `AppMsg` values already queued on `rx` without waiting.
+/// Call after [`start_all`] so boot-time service hook / spawn logs land in
+/// buffers before web clients connect or the TUI takes over the terminal.
+pub fn drain_pending(app: &mut App, rx: &mut mpsc::UnboundedReceiver<AppMsg>) {
+    while let Ok(msg) = rx.try_recv() {
+        apply_msg(app, msg);
+    }
+}
+
+/// Run global `before_stop`, per-service `before_stop` + kill, brief wait,
+/// then global `after_stop`.
+pub fn shutdown(app: &mut App) {
+    let hook_cwd = app.config_dir.clone();
+    if let Some(ref hook) = app.hooks.before_stop.clone() {
+        run_hook_sync(
+            HookPhase::BeforeStop,
+            hook,
+            hook_cwd.as_deref(),
+            None,
+            |line| {
+                log_global_hook(app, line);
+            },
+        );
+    }
+
+    for i in 0..app.services.len() {
+        // Skipping `Stopping`: stop_service already ran before_stop.
+        if matches!(app.services[i].status, Status::Running | Status::Starting) {
+            run_service_before_stop(i, app);
+        }
+        kill_tree(i, app);
+    }
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    if let Some(ref hook) = app.hooks.after_stop.clone() {
+        run_hook_sync(
+            HookPhase::AfterStop,
+            hook,
+            hook_cwd.as_deref(),
+            None,
+            |line| {
+                log_global_hook(app, line);
+            },
+        );
     }
 }
 
@@ -331,10 +520,7 @@ pub fn kill_tree(idx: usize, app: &mut App) {
 }
 
 pub fn cleanup_and_exit(app: &mut App) {
-    kill_all(app);
-    // Give them a moment to die
-    std::thread::sleep(Duration::from_millis(200));
-
+    shutdown(app);
     // Reset terminal if TUI was used (handled in run_tui_mode usually)
     std::process::exit(0);
 }
@@ -355,6 +541,7 @@ mod tests {
             pty: false,
             env_file: None,
             isolation: Default::default(),
+            hooks: Default::default(),
         });
 
         assert_eq!(state.status, Status::Stopped);

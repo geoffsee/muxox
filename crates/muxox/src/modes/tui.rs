@@ -3,7 +3,8 @@
 // This file is part of muxox, released under the MIT License.
 
 use muxox_core::app::{
-    App, AppMsg, ServiceState, Status, apply_msg, cleanup_and_exit, start_service, stop_service,
+    App, AppMsg, ServiceState, Status, apply_msg, cleanup_and_exit, drain_pending, start_all,
+    start_service, stop_service,
 };
 use muxox_core::config::Config;
 use muxox_core::isolation::default_isolation;
@@ -151,7 +152,7 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
         .run_until(async move {
             let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
             muxox_core::updates::spawn_update_check(tx.clone());
-            let app = App {
+            let mut app = App {
                 services: cfg.service.into_iter().map(ServiceState::new).collect(),
                 selected: 0,
                 log_offset_from_end: 0,
@@ -160,10 +161,17 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
                 input_buffer: String::new(),
                 isolation: default_isolation(),
                 update_notice: None,
+                hooks: cfg.hooks,
+                config_dir: cfg.config_dir,
+                settle_tx: None,
             };
 
             // Signal watcher (spawns on the tokio runtime, not the LocalSet)
             task::spawn(signal_watcher(tx.clone()));
+
+            // Boot hooks + start services before taking over the terminal.
+            start_all(&mut app).await;
+            drain_pending(&mut app, &mut rx);
 
             // Terminal setup
             enable_raw_mode()?;
@@ -174,14 +182,6 @@ pub async fn run_tui_mode(cfg: Config) -> Result<()> {
             // Shared state
             let app_ref: AppRef = Rc::new(RefCell::new(app));
             let view_out: ViewOut = Rc::new(RefCell::new(ViewNode::Empty));
-
-            // Start all services
-            {
-                let mut app = app_ref.borrow_mut();
-                for idx in 0..app.services.len() {
-                    start_service(idx, &mut app);
-                }
-            }
 
             // Dioxus VirtualDom (headless — we only use it for component state)
             let mut vdom = VirtualDom::new(tui_root)

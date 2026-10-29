@@ -18,9 +18,10 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use muxox_core::app::{
-    App, AppMsg, ServiceState, apply_msg, kill_all, start_service, stop_service,
+    App, AppMsg, ServiceState, apply_msg, drain_pending, shutdown, start_all, start_service,
+    stop_service,
 };
-use muxox_core::config::Config;
+use muxox_core::config::{Config, display_name};
 use muxox_core::isolation::default_isolation;
 use muxox_core::signal::signal_watcher;
 use std::net::SocketAddr;
@@ -29,7 +30,14 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task;
 
 pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
-    let Config { service, mcp, .. } = cfg;
+    let ui_name = display_name(&cfg).to_string();
+    let Config {
+        service,
+        mcp,
+        hooks,
+        config_dir,
+        ..
+    } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     muxox_core::updates::spawn_update_check(tx.clone());
     // Bytes rather than Vec<u8>: broadcast clones the value once per
@@ -46,14 +54,17 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
         input_buffer: String::new(),
         isolation: default_isolation(),
         update_notice: None,
+        hooks,
+        config_dir,
+        settle_tx: None,
     }));
 
-    // Start all services
     {
         let mut app_lock = app.lock().await;
-        for idx in 0..app_lock.services.len() {
-            start_service(idx, &mut app_lock);
-        }
+        start_all(&mut app_lock).await;
+        // Fold boot-time hook/spawn AppMsg into log buffers before any
+        // WebSocket Init snapshot, so the UI shows hooks immediately.
+        drain_pending(&mut app_lock, &mut rx);
     }
 
     // Signal watcher
@@ -103,7 +114,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
             }
 
             if matches!(msg, AppMsg::AbortedAll) {
-                kill_all(&mut app_lock);
+                shutdown(&mut app_lock);
                 std::process::exit(0);
             }
         }
@@ -112,6 +123,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     let shared_state = Arc::new(WebState {
         app: Arc::clone(&app),
         broadcast_tx: b_tx,
+        ui_name,
     });
 
     let router = Router::new()
@@ -137,10 +149,11 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
 struct WebState {
     app: Arc<Mutex<App>>,
     broadcast_tx: broadcast::Sender<Bytes>,
+    ui_name: String,
 }
 
-async fn index_handler() -> impl IntoResponse {
-    Html(ui::render_index())
+async fn index_handler(State(state): State<Arc<WebState>>) -> impl IntoResponse {
+    Html(ui::render_index(&state.ui_name))
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<WebState>>) -> impl IntoResponse {

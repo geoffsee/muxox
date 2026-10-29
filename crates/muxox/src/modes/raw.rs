@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use muxox_core::app::{App, AppMsg, ServiceState, Status, kill_all, start_service};
+use muxox_core::app::{App, AppMsg, ServiceState, Status, apply_msg, shutdown, start_all};
 use muxox_core::config::Config;
 use muxox_core::isolation::default_isolation;
 use muxox_core::signal::signal_watcher;
@@ -14,7 +14,13 @@ use tokio::sync::{Mutex, mpsc};
 use tokio::task;
 
 pub async fn run_raw_mode(cfg: Config) -> Result<()> {
-    let Config { service, mcp, .. } = cfg;
+    let Config {
+        service,
+        mcp,
+        hooks,
+        config_dir,
+        ..
+    } = cfg;
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     muxox_core::updates::spawn_update_check(tx.clone());
     let app = Arc::new(Mutex::new(App {
@@ -26,6 +32,9 @@ pub async fn run_raw_mode(cfg: Config) -> Result<()> {
         input_buffer: String::new(),
         isolation: default_isolation(),
         update_notice: None,
+        hooks,
+        config_dir,
+        settle_tx: None,
     }));
 
     // Signal watcher: on any exit signal, nuke children then exit.
@@ -41,11 +50,16 @@ pub async fn run_raw_mode(cfg: Config) -> Result<()> {
         });
     }
 
-    // Start all services
     {
         let mut guard = app.lock().await;
-        for idx in 0..guard.services.len() {
-            start_service(idx, &mut guard);
+        start_all(&mut guard).await;
+        // Print + buffer boot-time service hook lines before the main loop.
+        while let Ok(msg) = rx.try_recv() {
+            if let AppMsg::Log(idx, ref line) = msg {
+                let name = guard.services[idx].cfg.name.clone();
+                println!("[{name}] {line}");
+            }
+            apply_msg(&mut guard, msg);
         }
     }
 
@@ -95,10 +109,11 @@ pub async fn run_raw_mode(cfg: Config) -> Result<()> {
                 let mut guard = app.lock().await;
                 guard.services[idx].stdin_writer = Some(writer);
             }
+            Some(AppMsg::SpawnSettled(_)) => {}
             Some(AppMsg::AbortedAll) => {
                 eprintln!("All services aborted");
                 let mut guard = app.lock().await;
-                kill_all(&mut guard);
+                shutdown(&mut guard);
                 break;
             }
             None => break,

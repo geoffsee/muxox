@@ -214,6 +214,22 @@ header {
     cursor: not-allowed;
 }
 
+/* `.controls button { display: inline-flex }` otherwise beats UA `[hidden]`. */
+.controls button[hidden] {
+    display: none;
+}
+
+.controls button.follow-btn {
+    color: var(--accent);
+    border-color: rgba(59, 130, 246, 0.35);
+}
+
+.controls button.follow-btn:hover {
+    color: #fff;
+    background: rgba(59, 130, 246, 0.2);
+    border-color: rgba(59, 130, 246, 0.5);
+}
+
 .log-area {
     flex: 1;
     min-height: 0;

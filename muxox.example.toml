@@ -1,6 +1,17 @@
+# Optional: label shown in the web UI header / page title (default: "muxox").
+# name = "My Project"
+
 # Optional: require a specific muxox release range.  Loading the config
 # fails when the running binary does not satisfy the semver range.
 # muxox_version = ">=1.4, <2.0"
+
+# Global lifecycle hooks (once at boot / shutdown).
+# Non-zero exits log a warning and continue.
+[hooks]
+before_start = "./example/scripts/boot-pre.sh"
+after_start  = "./example/scripts/boot-post.sh"
+before_stop  = "./example/scripts/shutdown-pre.sh"
+after_stop   = "./example/scripts/shutdown-post.sh"
 
 # Optional embedded MCP (Model Context Protocol) server.  When enabled, muxox
 # exposes a JSON-RPC endpoint at http://{bind}:{port}/mcp that lets MCP-aware
@@ -24,12 +35,15 @@ cmd = "bun ./index.ts"
 cwd = "example/packages/example-service-1"
 log_capacity = 5000
 env_file = "example/packages/example-service-1/.env.example"
+# Service hooks inherit this service's cwd, so paths are relative to the package.
+hooks = { before_start = "../../scripts/service-pre.sh", after_stop = "../../scripts/service-cleanup.sh" }
 
 [[service]]
 name = "example-service-2"
 cmd = "bun ./index.ts"
 cwd = "example/packages/example-service-2"
 log_capacity = 5000
+hooks = { before_start = "../../scripts/service-pre.sh", after_stop = "../../scripts/service-cleanup.sh" }
 
 # Isolation example – opt-in per-service sandboxing.
 # All flags default to false.  Enable only what you need.

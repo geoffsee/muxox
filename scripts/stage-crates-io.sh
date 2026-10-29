@@ -294,6 +294,12 @@ if [[ "$drift" -ne 0 ]]; then
   exit 1
 fi
 
+# Cargo fingerprints can skip content hashing when a source file's mtime is not
+# newer than the fingerprint (common when CI restores a cached target/staged
+# from an older publish/muxox tree). Bump every staged file so the next
+# clippy/test against target/staged always rehashes against these sources.
+find "$STAGE" -type f -exec touch {} +
+
 echo "Staged crates.io package at $STAGE"
 echo "Verify:  cargo test    --manifest-path publish/muxox/Cargo.toml"
 echo "Package: cargo package --manifest-path publish/muxox/Cargo.toml"

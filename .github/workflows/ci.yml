@@ -38,12 +38,15 @@ jobs:
 
       # muxox ships as a single crate flattened out of this workspace. Build it
       # on every push so drift (a new module, a new dependency) is caught here
-      # rather than on release day. Shares the cached target dir so the already
-      # built dependency artifacts are reused.
+      # rather than on release day. Shares the cached target dir so dependency
+      # artifacts are reused, but always drops staged muxox fingerprints: a
+      # restored target/staged from an older publish/muxox can look "fresh" to
+      # cargo while the rewritten tests already include newer struct fields.
       - name: Verify single-crate package
         shell: bash
         run: |
           ./scripts/stage-crates-io.sh
+          cargo clean -p muxox --manifest-path publish/muxox/Cargo.toml --target-dir target/staged
           cargo clippy --manifest-path publish/muxox/Cargo.toml --all-targets --all-features \
             --target-dir target/staged -- -D warnings
           cargo test --manifest-path publish/muxox/Cargo.toml --target-dir target/staged

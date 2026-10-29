@@ -1,3 +1,5 @@
+name = "muxox example"
+
 # Global lifecycle hooks (once at boot / shutdown).
 [hooks]
 before_start = "./scripts/boot-pre.sh"

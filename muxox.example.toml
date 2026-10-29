@@ -1,3 +1,6 @@
+# Optional: label shown in the web UI header / page title (default: "muxox").
+# name = "My Project"
+
 # Optional: require a specific muxox release range.  Loading the config
 # fails when the running binary does not satisfy the semver range.
 # muxox_version = ">=1.4, <2.0"

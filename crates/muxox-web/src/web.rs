@@ -21,7 +21,7 @@ use muxox_core::app::{
     App, AppMsg, ServiceState, apply_msg, drain_pending, shutdown, start_all, start_service,
     stop_service,
 };
-use muxox_core::config::Config;
+use muxox_core::config::{Config, display_name};
 use muxox_core::isolation::default_isolation;
 use muxox_core::signal::signal_watcher;
 use std::net::SocketAddr;
@@ -30,6 +30,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task;
 
 pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
+    let ui_name = display_name(&cfg).to_string();
     let Config {
         service,
         mcp,
@@ -122,6 +123,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     let shared_state = Arc::new(WebState {
         app: Arc::clone(&app),
         broadcast_tx: b_tx,
+        ui_name,
     });
 
     let router = Router::new()
@@ -147,10 +149,11 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
 struct WebState {
     app: Arc<Mutex<App>>,
     broadcast_tx: broadcast::Sender<Bytes>,
+    ui_name: String,
 }
 
-async fn index_handler() -> impl IntoResponse {
-    Html(ui::render_index())
+async fn index_handler(State(state): State<Arc<WebState>>) -> impl IntoResponse {
+    Html(ui::render_index(&state.ui_name))
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<WebState>>) -> impl IntoResponse {

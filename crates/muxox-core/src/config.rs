@@ -15,6 +15,10 @@ pub const MUXOX_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct Config {
+    /// Optional display name shown in the web UI header (and page title).
+    /// Defaults to `"muxox"` when omitted or blank.
+    #[serde(default)]
+    pub name: Option<String>,
     /// Optional semver range (e.g. `">=1.4, <2.0"`) that the running `muxox`
     /// binary must satisfy.  Loading the config fails if the range is not met.
     #[serde(default)]
@@ -85,6 +89,15 @@ impl Default for McpCfg {
 
 fn default_mcp_bind() -> String {
     "127.0.0.1".to_string()
+}
+
+/// Resolve the UI display name from config, falling back to `"muxox"`.
+pub fn display_name(cfg: &Config) -> &str {
+    cfg.name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("muxox")
 }
 
 /// Validate `cfg.muxox_version` against `running` (typically [`MUXOX_VERSION`]).
@@ -388,7 +401,31 @@ API_KEY=abc123
         assert_eq!(cfg.service.len(), 2);
         assert_eq!(cfg.service[0].name, "svc1");
         assert_eq!(cfg.service[1].name, "svc2");
+        assert!(cfg.name.is_none());
         assert!(cfg.muxox_version.is_none());
+        assert_eq!(display_name(&cfg), "muxox");
+    }
+
+    #[test]
+    fn test_top_level_name_field_parses() {
+        let toml_input = r#"
+            name = "Acme Dev"
+            [[service]]
+            name = "svc1"
+            cmd = "run1"
+        "#;
+        let cfg: Config = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.name.as_deref(), Some("Acme Dev"));
+        assert_eq!(display_name(&cfg), "Acme Dev");
+    }
+
+    #[test]
+    fn test_blank_top_level_name_falls_back() {
+        let cfg = Config {
+            name: Some("   ".into()),
+            ..Default::default()
+        };
+        assert_eq!(display_name(&cfg), "muxox");
     }
 
     #[test]

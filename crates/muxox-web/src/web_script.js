@@ -23,11 +23,13 @@
     let appliedBudget = -1;
     let layoutTick = 0;
 
+    const FOLLOW_THRESHOLD = 8;
     const icons = {
         play: '<path d="M6 4l12 8-12 8z"/>',
         stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
         send: '<path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4z"/>',
         terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+        follow: '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>',
     };
 
     function icon(name) {
@@ -161,14 +163,47 @@
         return `rgb(${r ? r * 40 + 55 : 0},${g ? g * 40 + 55 : 0},${b ? b * 40 + 55 : 0})`;
     }
 
+    function isNearBottom(log) {
+        return log.scrollHeight - log.scrollTop - log.clientHeight < FOLLOW_THRESHOLD;
+    }
+
+    function isFollowing(log) {
+        return log.dataset.following !== "0";
+    }
+
+    function setFollowing(log, following) {
+        log.dataset.following = following ? "1" : "0";
+        const btn = document.getElementById(`follow-${log.dataset.idx}`);
+        if (btn) btn.hidden = following;
+    }
+
+    function resumeFollow(log) {
+        setFollowing(log, true);
+        log.scrollTop = log.scrollHeight;
+    }
+
+    function onLogScroll(log) {
+        setFollowing(log, isNearBottom(log));
+    }
+
     function writeLog(log, line) {
+        const following = isFollowing(log);
+        const prevHeight = log.scrollHeight;
+        const prevTop = log.scrollTop;
         const el = document.createElement("div");
         el.innerHTML = ansiToHtml(line);
         log.appendChild(el);
+        let trimmed = false;
         if (log.childNodes.length > MAX_LOG_LINES) {
             log.removeChild(log.firstChild);
+            trimmed = true;
         }
-        log.scrollTop = log.scrollHeight;
+        if (following) {
+            log.scrollTop = log.scrollHeight;
+        } else if (trimmed) {
+            // Keep the viewport anchored when oldest lines fall off the top.
+            log.scrollTop = prevTop + (log.scrollHeight - prevHeight);
+        }
     }
 
     function appendLog(idx, line) {
@@ -232,12 +267,24 @@
         stopBtn.disabled = svc.status === "Stopped";
         stopBtn.onclick = () => sendCommand(idx, "stop");
 
-        controls.append(startBtn, stopBtn);
+        const followBtn = document.createElement("button");
+        followBtn.id = `follow-${idx}`;
+        followBtn.className = "follow-btn";
+        followBtn.type = "button";
+        followBtn.innerHTML = `${icon("follow")} Follow`;
+        followBtn.title = "Resume following new log output";
+        followBtn.hidden = true;
+
+        controls.append(followBtn, startBtn, stopBtn);
         header.append(name, controls);
 
         const logArea = document.createElement("div");
         logArea.className = "log-area";
         logArea.id = `log-${idx}`;
+        logArea.dataset.idx = String(idx);
+        logArea.dataset.following = "1";
+        followBtn.onclick = () => resumeFollow(logArea);
+        logArea.addEventListener("scroll", () => onLogScroll(logArea), { passive: true });
 
         box.append(header, logArea);
 
@@ -471,13 +518,14 @@
     function capturePin(box) {
         const log = box.querySelector(".log-area");
         if (!log) return null;
-        const distance = log.scrollHeight - log.scrollTop - log.clientHeight;
-        return { log, pin: distance < 8 };
+        return { log, pin: isFollowing(log) || isNearBottom(log) };
     }
 
     function restorePin(pins) {
         pins.forEach((pin) => {
-            if (pin && pin.pin) pin.log.scrollTop = pin.log.scrollHeight;
+            if (!pin || !pin.pin) return;
+            pin.log.scrollTop = pin.log.scrollHeight;
+            setFollowing(pin.log, true);
         });
     }
 

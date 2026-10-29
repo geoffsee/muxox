@@ -23,6 +23,11 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 # ---------------------------------------------------------------------------
 # Top-level fields
 # ---------------------------------------------------------------------------
+# name (string, optional) Display name shown in the web UI header and page
+#                         title.  Defaults to "muxox" when omitted.
+#
+# name = "My Project"
+#
 # muxox_version (string,  optional) Semver range the running `muxox` binary
 #                                   must satisfy.  Examples: ">=1.4, <2.0",
 #                                   "^1.4", "~1.4.2", "=1.4.0".  Loading the

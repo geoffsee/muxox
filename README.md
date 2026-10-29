@@ -123,6 +123,13 @@ JavaScript package-manager installations.
 
 ## Configuration
 
+Top-level options:
+
+- name: Display name for the web UI header and page title (optional; default `muxox`)
+- muxox_version: Semver range the running muxox binary must satisfy (optional)
+- hooks: Global lifecycle hooks run once at boot / shutdown (optional; see below)
+- mcp: Embedded MCP server settings (optional; see below)
+
 Each service supports:
 
 - name: Unique identifier (required)

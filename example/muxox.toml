@@ -1,3 +1,10 @@
+# Global lifecycle hooks (once at boot / shutdown).
+[hooks]
+before_start = "./scripts/boot-pre.sh"
+after_start  = "./scripts/boot-post.sh"
+before_stop  = "./scripts/shutdown-pre.sh"
+after_stop   = "./scripts/shutdown-post.sh"
+
 [[service]]
 name = "test-stdin"
 cmd = "./test-stdin.sh"
@@ -19,9 +26,11 @@ cmd = "bun ./index.ts"
 cwd = "packages/example-service-1"
 env_file = "packages/example-service-1/.env.example"
 log_capacity = 5000
+hooks = { before_start = "../../scripts/service-pre.sh", after_stop = "../../scripts/service-cleanup.sh" }
 
 [[service]]
 name = "example-service-2"
 cmd = "bun ./index.ts"
 cwd = "packages/example-service-2"
 log_capacity = 5000
+hooks = { before_start = "../../scripts/service-pre.sh", after_stop = "../../scripts/service-cleanup.sh" }

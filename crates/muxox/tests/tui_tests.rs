@@ -13,6 +13,7 @@ fn test_cfg(name: &str, interactive: bool) -> ServiceCfg {
         pty: false,
         env_file: None,
         isolation: Default::default(),
+        hooks: Default::default(),
     }
 }
 
@@ -27,6 +28,9 @@ fn test_app(cfgs: Vec<ServiceCfg>) -> App {
         input_buffer: String::new(),
         isolation: default_isolation(),
         update_notice: None,
+        hooks: Default::default(),
+        config_dir: None,
+        settle_tx: None,
     }
 }
 

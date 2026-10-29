@@ -16,6 +16,7 @@ mod tests {
             pty: false,
             env_file: None,
             isolation: Default::default(),
+            hooks: Default::default(),
         }
     }
 
@@ -33,6 +34,9 @@ mod tests {
             input_buffer: String::new(),
             isolation: default_isolation(),
             update_notice: None,
+            hooks: Default::default(),
+            config_dir: None,
+            settle_tx: None,
         }
     }
 
@@ -88,6 +92,7 @@ mod tests {
                 pty: false,
                 env_file: None,
                 isolation: Default::default(),
+                hooks: Default::default(),
             })],
             selected: 0,
             log_offset_from_end: 0,
@@ -96,6 +101,9 @@ mod tests {
             input_buffer: String::new(),
             isolation: default_isolation(),
             update_notice: None,
+            hooks: Default::default(),
+            config_dir: None,
+            settle_tx: None,
         };
 
         for i in 0..5 {
@@ -198,5 +206,144 @@ mod tests {
         assert_eq!(app.services[2].status, Status::Stopped);
         assert_eq!(app.services[2].log.len(), 1);
         assert!(app.services[0].log.is_empty());
+    }
+
+    #[test]
+    fn apply_spawn_settled_is_noop() {
+        let mut app = test_app(&["svc"]);
+        app.services[0].status = Status::Starting;
+        apply_msg(&mut app, AppMsg::SpawnSettled(0));
+        assert_eq!(app.services[0].status, Status::Starting);
+    }
+
+    // --- Lifecycle hooks ---
+
+    #[tokio::test]
+    async fn start_service_runs_before_start_hook() {
+        use crate::app::start_service;
+        use crate::config::HooksCfg;
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut cfg = test_cfg("hooked");
+        cfg.cmd = "echo main-cmd".into();
+        cfg.hooks = HooksCfg {
+            before_start: Some("echo before-ran".into()),
+            after_start: Some("echo after-start-ran".into()),
+            before_stop: None,
+            after_stop: Some("echo after-stop-ran".into()),
+        };
+        let mut app = App {
+            services: vec![ServiceState::new(cfg)],
+            selected: 0,
+            log_offset_from_end: 0,
+            tx,
+            input_mode: false,
+            input_buffer: String::new(),
+            isolation: default_isolation(),
+            update_notice: None,
+            hooks: Default::default(),
+            config_dir: None,
+            settle_tx: None,
+        };
+
+        start_service(0, &mut app);
+
+        let mut saw_before = false;
+        let mut saw_after_start = false;
+        let mut saw_after_stop = false;
+        let mut saw_settled = false;
+        let mut saw_stopped = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(AppMsg::Log(_, line))) => {
+                    if line.contains("before-ran") {
+                        saw_before = true;
+                    }
+                    if line.contains("after-start-ran") {
+                        saw_after_start = true;
+                    }
+                    if line.contains("after-stop-ran") {
+                        saw_after_stop = true;
+                    }
+                }
+                Ok(Some(AppMsg::SpawnSettled(0))) => saw_settled = true,
+                Ok(Some(AppMsg::Stopped(0, _))) => {
+                    saw_stopped = true;
+                    break;
+                }
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        assert!(saw_before, "before_start hook output missing");
+        assert!(saw_after_start, "after_start hook output missing");
+        assert!(saw_settled, "SpawnSettled missing");
+        assert!(saw_after_stop, "after_stop hook output missing");
+        assert!(saw_stopped, "Stopped missing");
+    }
+
+    #[tokio::test]
+    async fn start_all_runs_global_hooks_around_services() {
+        use crate::app::start_all;
+        use crate::config::HooksCfg;
+
+        let marker = std::env::temp_dir().join(format!(
+            "muxox_hook_order_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut cfg = test_cfg("svc");
+        cfg.cmd = "echo service".into();
+        let mut app = App {
+            services: vec![ServiceState::new(cfg)],
+            selected: 0,
+            log_offset_from_end: 0,
+            tx,
+            input_mode: false,
+            input_buffer: String::new(),
+            isolation: default_isolation(),
+            update_notice: None,
+            hooks: HooksCfg {
+                before_start: Some(format!("echo boot-pre >> {}", marker.display())),
+                after_start: Some(format!("echo boot-post >> {}", marker.display())),
+                before_stop: None,
+                after_stop: None,
+            },
+            config_dir: None,
+            settle_tx: None,
+        };
+
+        start_all(&mut app).await;
+
+        let logs: Vec<String> = app.services[0].log.iter().cloned().collect();
+        assert!(
+            logs.iter().any(|l| l.contains("[hooks]") && l.contains("boot-pre")),
+            "global before_start should appear in service logs: {logs:?}"
+        );
+        assert!(
+            logs.iter()
+                .any(|l| l.contains("[hooks]") && l.contains("boot-post")),
+            "global after_start should appear in service logs: {logs:?}"
+        );
+
+        // Drain until settled service stops so the test doesn't leak a task.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(AppMsg::Stopped(_, _))) => break,
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        let contents = std::fs::read_to_string(&marker).expect("marker written");
+        let pre = contents.find("boot-pre").expect("boot-pre present");
+        let post = contents.find("boot-post").expect("boot-post present");
+        assert!(pre < post, "global before_start should run before after_start");
+        let _ = std::fs::remove_file(&marker);
     }
 }

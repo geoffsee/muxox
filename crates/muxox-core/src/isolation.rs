@@ -539,6 +539,7 @@ mod tests {
             pty: false,
             env_file: None,
             isolation: IsolationCfg::default(),
+            hooks: Default::default(),
         };
         pg.post_spawn(12345, &cfg); // should be a no-op
     }

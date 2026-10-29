@@ -25,6 +25,33 @@ pub struct Config {
     /// and logs to MCP-compatible agents over HTTP.
     #[serde(default)]
     pub mcp: McpCfg,
+    /// Optional global lifecycle hooks run once at Muxox boot / shutdown.
+    #[serde(default)]
+    pub hooks: HooksCfg,
+    /// Directory containing the loaded config file.  Relative `cwd` / `env_file`
+    /// values and global hook commands resolve against this (not the process
+    /// CWD).  Skipped by serde; set by [`load_config`].
+    #[serde(skip)]
+    pub config_dir: Option<PathBuf>,
+}
+
+/// Shell commands run around service start/stop (and optionally once globally
+/// at Muxox boot/shutdown).  All fields are optional; a failing hook logs a
+/// warning and does not abort the lifecycle action.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct HooksCfg {
+    /// Run before the service command is spawned (or before any service at boot).
+    #[serde(default)]
+    pub before_start: Option<String>,
+    /// Run after a successful spawn (or after every boot start has settled).
+    #[serde(default)]
+    pub after_start: Option<String>,
+    /// Run before an explicit stop/kill (or once before shutdown kills).
+    #[serde(default)]
+    pub before_stop: Option<String>,
+    /// Run after the process exits (or once after shutdown kills).
+    #[serde(default)]
+    pub after_stop: Option<String>,
 }
 
 /// Settings for the embedded MCP (Model Context Protocol) server.
@@ -93,12 +120,16 @@ pub struct ServiceCfg {
     #[serde(default)]
     pub pty: bool,
     /// Path to a .env file whose KEY=VALUE pairs are injected into the
-    /// service's environment.  Relative paths resolve from the process CWD.
+    /// service's environment.  Relative paths resolve from the config file's
+    /// directory (see [`Config::config_dir`]).
     #[serde(default)]
     pub env_file: Option<PathBuf>,
     /// Optional isolation / sandboxing settings for this service.
     #[serde(default)]
     pub isolation: IsolationCfg,
+    /// Optional per-service lifecycle hooks.
+    #[serde(default)]
+    pub hooks: HooksCfg,
 }
 
 fn default_log_capacity() -> usize {
@@ -149,6 +180,34 @@ pub fn parse_env_file(path: &Path) -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
+/// Join `path` onto `base` when `path` is relative; leave absolute paths alone.
+pub fn resolve_against(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+/// Resolve relative service `cwd` / `env_file` paths against the config
+/// directory and record that directory for global hook execution.
+pub fn apply_config_dir(cfg: &mut Config, config_path: &Path) {
+    let dir = config_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+    for svc in &mut cfg.service {
+        if let Some(ref cwd) = svc.cwd {
+            svc.cwd = Some(resolve_against(&dir, cwd));
+        }
+        if let Some(ref env_file) = svc.env_file {
+            svc.env_file = Some(resolve_against(&dir, env_file));
+        }
+    }
+    cfg.config_dir = Some(dir);
+}
+
 pub fn load_config(provided: Option<&Path>) -> Result<Config> {
     let candidates: Vec<PathBuf> = match provided {
         Some(p) => vec![p.to_path_buf()],
@@ -163,9 +222,11 @@ pub fn load_config(provided: Option<&Path>) -> Result<Config> {
     for path in candidates {
         if path.exists() {
             let data = fs::read_to_string(&path)?;
-            let cfg: Config = toml::from_str(&data).with_context(|| format!("parsing {path:?}"))?;
+            let mut cfg: Config =
+                toml::from_str(&data).with_context(|| format!("parsing {path:?}"))?;
             enforce_version_req(&cfg, MUXOX_VERSION)
                 .with_context(|| format!("validating {path:?}"))?;
+            apply_config_dir(&mut cfg, &path);
             return Ok(cfg);
         }
     }
@@ -343,11 +404,70 @@ API_KEY=abc123
     }
 
     #[test]
+    fn test_hooks_cfg_defaults_empty() {
+        let toml_input = r#"
+            name = "svc"
+            cmd = "echo hi"
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.hooks, HooksCfg::default());
+    }
+
+    #[test]
+    fn test_service_hooks_inline_table() {
+        let toml_input = r#"
+            name = "api"
+            cmd = "bun run dev"
+            hooks = { before_start = "./pre.sh", after_stop = "./post.sh" }
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.hooks.before_start.as_deref(), Some("./pre.sh"));
+        assert!(cfg.hooks.after_start.is_none());
+        assert!(cfg.hooks.before_stop.is_none());
+        assert_eq!(cfg.hooks.after_stop.as_deref(), Some("./post.sh"));
+    }
+
+    #[test]
+    fn test_service_hooks_subtable() {
+        let toml_input = r#"
+            name = "api"
+            cmd = "bun run dev"
+            [hooks]
+            before_start = "./pre.sh"
+            after_start = "./ready.sh"
+            before_stop = "./drain.sh"
+            after_stop = "./cleanup.sh"
+        "#;
+        let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.hooks.before_start.as_deref(), Some("./pre.sh"));
+        assert_eq!(cfg.hooks.after_start.as_deref(), Some("./ready.sh"));
+        assert_eq!(cfg.hooks.before_stop.as_deref(), Some("./drain.sh"));
+        assert_eq!(cfg.hooks.after_stop.as_deref(), Some("./cleanup.sh"));
+    }
+
+    #[test]
+    fn test_global_hooks_on_config() {
+        let toml_input = r#"
+            [hooks]
+            before_start = "./boot-pre.sh"
+            after_stop = "./shutdown-post.sh"
+            [[service]]
+            name = "svc1"
+            cmd = "run1"
+        "#;
+        let cfg: Config = toml::from_str(toml_input).unwrap();
+        assert_eq!(cfg.hooks.before_start.as_deref(), Some("./boot-pre.sh"));
+        assert!(cfg.hooks.after_start.is_none());
+        assert!(cfg.hooks.before_stop.is_none());
+        assert_eq!(cfg.hooks.after_stop.as_deref(), Some("./shutdown-post.sh"));
+        assert!(cfg.service[0].hooks.before_start.is_none());
+    }
+
+    #[test]
     fn test_enforce_version_req_satisfied() {
         let cfg = Config {
-            mcp: McpCfg::default(),
             muxox_version: Some(">=1.4, <2.0".to_string()),
-            service: vec![],
+            ..Default::default()
         };
         enforce_version_req(&cfg, "1.4.0").expect("1.4.0 satisfies >=1.4, <2.0");
         enforce_version_req(&cfg, "1.9.3").expect("1.9.3 satisfies >=1.4, <2.0");
@@ -356,9 +476,8 @@ API_KEY=abc123
     #[test]
     fn test_enforce_version_req_unsatisfied() {
         let cfg = Config {
-            mcp: McpCfg::default(),
             muxox_version: Some(">=1.4, <2.0".to_string()),
-            service: vec![],
+            ..Default::default()
         };
         let err = enforce_version_req(&cfg, "1.3.0").expect_err("1.3.0 must not satisfy >=1.4");
         assert!(err.to_string().contains("does not satisfy"));
@@ -369,20 +488,15 @@ API_KEY=abc123
 
     #[test]
     fn test_enforce_version_req_absent_is_ok() {
-        let cfg = Config {
-            mcp: McpCfg::default(),
-            muxox_version: None,
-            service: vec![],
-        };
+        let cfg = Config::default();
         enforce_version_req(&cfg, "0.0.1").expect("no constraint => any version is fine");
     }
 
     #[test]
     fn test_enforce_version_req_invalid_range() {
         let cfg = Config {
-            mcp: McpCfg::default(),
             muxox_version: Some("not-a-range".to_string()),
-            service: vec![],
+            ..Default::default()
         };
         let err = enforce_version_req(&cfg, "1.4.0").expect_err("garbage range must error");
         assert!(err.to_string().contains("invalid muxox_version"));
@@ -391,17 +505,15 @@ API_KEY=abc123
     #[test]
     fn test_enforce_version_req_caret_and_tilde() {
         let cfg = Config {
-            mcp: McpCfg::default(),
             muxox_version: Some("^1.4".to_string()),
-            service: vec![],
+            ..Default::default()
         };
         enforce_version_req(&cfg, "1.5.7").expect("^1.4 admits 1.5.7");
         enforce_version_req(&cfg, "2.0.0").expect_err("^1.4 excludes 2.0.0");
 
         let cfg = Config {
-            mcp: McpCfg::default(),
             muxox_version: Some("~1.4.2".to_string()),
-            service: vec![],
+            ..Default::default()
         };
         enforce_version_req(&cfg, "1.4.9").expect("~1.4.2 admits 1.4.9");
         enforce_version_req(&cfg, "1.5.0").expect_err("~1.4.2 excludes 1.5.0");
@@ -410,11 +522,50 @@ API_KEY=abc123
     #[test]
     fn test_running_muxox_version_satisfies_workspace_range() {
         let cfg = Config {
-            mcp: McpCfg::default(),
             muxox_version: Some(format!("={MUXOX_VERSION}")),
-            service: vec![],
+            ..Default::default()
         };
         enforce_version_req(&cfg, MUXOX_VERSION)
             .expect("running version always satisfies its own pinned range");
+    }
+
+    #[test]
+    fn test_apply_config_dir_resolves_relative_paths() {
+        let toml_input = r#"
+            [[service]]
+            name = "svc"
+            cmd = "echo hi"
+            cwd = "packages/svc"
+            env_file = "packages/svc/.env"
+        "#;
+        let mut cfg: Config = toml::from_str(toml_input).unwrap();
+        apply_config_dir(&mut cfg, Path::new("example/muxox.toml"));
+        assert_eq!(cfg.config_dir, Some(PathBuf::from("example")));
+        assert_eq!(
+            cfg.service[0].cwd.as_deref(),
+            Some(Path::new("example/packages/svc"))
+        );
+        assert_eq!(
+            cfg.service[0].env_file.as_deref(),
+            Some(Path::new("example/packages/svc/.env"))
+        );
+    }
+
+    #[test]
+    fn test_apply_config_dir_keeps_absolute_paths() {
+        let toml_input = r#"
+            [[service]]
+            name = "svc"
+            cmd = "echo hi"
+            cwd = "/abs/cwd"
+            env_file = "/abs/.env"
+        "#;
+        let mut cfg: Config = toml::from_str(toml_input).unwrap();
+        apply_config_dir(&mut cfg, Path::new("/configs/muxox.toml"));
+        assert_eq!(cfg.service[0].cwd.as_deref(), Some(Path::new("/abs/cwd")));
+        assert_eq!(
+            cfg.service[0].env_file.as_deref(),
+            Some(Path::new("/abs/.env"))
+        );
     }
 }

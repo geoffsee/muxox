@@ -6,7 +6,8 @@
 //!
 //! Speaks JSON-RPC 2.0 over the MCP Streamable HTTP transport (POST-only,
 //! single JSON response).  Exposes a small set of tools that let MCP-aware
-//! agents inspect muxox-managed services and read their captured logs.
+//! agents inspect muxox-managed services, read their captured logs, and start
+//! or stop a service by name.
 
 use anyhow::Result;
 use axum::{
@@ -16,7 +17,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use muxox_core::app::App;
+use muxox_core::app::{self, App};
 use muxox_core::config::McpCfg;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -153,7 +154,7 @@ fn handle_initialize(params: &Value) -> Value {
             "name": "muxox",
             "version": env!("CARGO_PKG_VERSION"),
         },
-        "instructions": "Use `list_services` to discover managed services and `get_logs` to retrieve their captured stdout/stderr.",
+        "instructions": "Use `list_services` to discover managed services, `get_logs` to retrieve their captured stdout/stderr, and `start_service` or `stop_service` to start or stop one service by name.",
     })
 }
 
@@ -193,6 +194,36 @@ fn handle_tools_list() -> Value {
                     "required": ["service"],
                     "additionalProperties": false
                 }
+            },
+            {
+                "name": "start_service",
+                "description": "Start one managed service by name, using the same start path as the web UI. No-op when the service is already Starting or Running. Returns as soon as the start is accepted; status is Starting until the process is up.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "service": {
+                            "type": "string",
+                            "description": "Service name as defined in muxox.toml."
+                        }
+                    },
+                    "required": ["service"],
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "stop_service",
+                "description": "Stop one managed service by name, using the same stop path as the web UI. No-op unless the service is Starting or Running. Returns as soon as the stop is accepted; status is Stopping until the process exits.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "service": {
+                            "type": "string",
+                            "description": "Service name as defined in muxox.toml."
+                        }
+                    },
+                    "required": ["service"],
+                    "additionalProperties": false
+                }
             }
         ]
     })
@@ -211,6 +242,8 @@ async fn handle_tools_call(
     match name {
         "list_services" => list_services_tool(state).await,
         "get_logs" => get_logs_tool(args, state).await,
+        "start_service" => service_action_tool(args, state, ServiceAction::Start).await,
+        "stop_service" => service_action_tool(args, state, ServiceAction::Stop).await,
         other => Err(JsonRpcError::invalid_params(format!(
             "unknown tool: {other}"
         ))),
@@ -300,6 +333,63 @@ async fn get_logs_tool(args: Value, state: &McpState) -> std::result::Result<Val
     }))
 }
 
+enum ServiceAction {
+    Start,
+    Stop,
+}
+
+/// Start or stop one service by name via [`app::start_service`] / [`app::stop_service`].
+async fn service_action_tool(
+    args: Value,
+    state: &McpState,
+    action: ServiceAction,
+) -> std::result::Result<Value, JsonRpcError> {
+    let service_name = args
+        .get("service")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| JsonRpcError::invalid_params("missing 'service' argument"))?
+        .to_string();
+
+    let mut app = state.app.lock().await;
+    let idx = app
+        .services
+        .iter()
+        .position(|s| s.cfg.name == service_name)
+        .ok_or_else(|| {
+            JsonRpcError::invalid_params(format!("service not found: {service_name}"))
+        })?;
+
+    let previous = app.services[idx].status;
+    match action {
+        ServiceAction::Start => app::start_service(idx, &mut app),
+        ServiceAction::Stop => app::stop_service(idx, &mut app),
+    }
+    let status = app.services[idx].status;
+    let pid = app.services[idx].pid;
+    let changed = previous != status;
+    let text = if changed {
+        format!(
+            "{service_name}: {} -> {}",
+            previous.as_str(),
+            status.as_str()
+        )
+    } else {
+        format!("{service_name}: {} (unchanged)", status.as_str())
+    };
+
+    Ok(json!({
+        "content": [{ "type": "text", "text": text }],
+        "structuredContent": {
+            "service": service_name,
+            "index": idx,
+            "previous_status": previous.as_str(),
+            "status": status.as_str(),
+            "changed": changed,
+            "pid": pid,
+        },
+    }))
+}
+
 /// Bind and serve the MCP server.  Runs forever; intended to be spawned as a
 /// background task.
 pub async fn run_mcp_server(cfg: McpCfg, app: Arc<Mutex<App>>) -> Result<()> {
@@ -383,6 +473,8 @@ mod tests {
             .collect();
         assert!(names.contains(&"list_services"));
         assert!(names.contains(&"get_logs"));
+        assert!(names.contains(&"start_service"));
+        assert!(names.contains(&"stop_service"));
     }
 
     #[tokio::test]
@@ -455,6 +547,147 @@ mod tests {
             .await
             .unwrap();
         assert!(v["structuredContent"]["services"].is_array());
+    }
+
+    #[tokio::test]
+    async fn start_service_tool_starts_stopped_service() {
+        let app = make_app(vec![("alpha", vec![])]);
+        {
+            let mut guard = app.lock().await;
+            guard.services[0].status = Status::Stopped;
+            guard.services[0].cfg.cmd = "true".into();
+        }
+        let state = McpState {
+            app: Arc::clone(&app),
+        };
+        let result =
+            service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Start)
+                .await
+                .unwrap();
+        assert_eq!(result["content"][0]["text"], "alpha: Stopped -> Starting");
+        assert_eq!(result["structuredContent"]["status"], "Starting");
+        assert_eq!(result["structuredContent"]["previous_status"], "Stopped");
+        assert_eq!(result["structuredContent"]["changed"], true);
+        assert_eq!(result["structuredContent"]["index"], 0);
+        assert_eq!(app.lock().await.services[0].status, Status::Starting);
+    }
+
+    #[tokio::test]
+    async fn start_service_tool_is_noop_when_already_running() {
+        let app = make_app(vec![("alpha", vec![])]);
+        let state = McpState { app };
+        let result =
+            service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Start)
+                .await
+                .unwrap();
+        assert_eq!(result["content"][0]["text"], "alpha: Running (unchanged)");
+        assert_eq!(result["structuredContent"]["changed"], false);
+        assert_eq!(result["structuredContent"]["status"], "Running");
+    }
+
+    #[tokio::test]
+    async fn start_service_tool_targets_the_first_matching_name() {
+        let app = make_app(vec![("dup", vec![]), ("dup", vec![])]);
+        {
+            let mut guard = app.lock().await;
+            guard.services[1].status = Status::Stopped;
+        }
+        let state = McpState {
+            app: Arc::clone(&app),
+        };
+        let result = service_action_tool(json!({ "service": "dup" }), &state, ServiceAction::Start)
+            .await
+            .unwrap();
+        assert_eq!(result["structuredContent"]["index"], 0);
+        assert_eq!(result["structuredContent"]["changed"], false);
+        let guard = app.lock().await;
+        assert_eq!(guard.services[0].status, Status::Running);
+        assert_eq!(guard.services[1].status, Status::Stopped);
+    }
+
+    #[tokio::test]
+    async fn stop_service_tool_stops_running_service() {
+        let app = make_app(vec![("alpha", vec![])]);
+        {
+            let mut guard = app.lock().await;
+            // Nonexistent pid: terminate signals this id, not a live process.
+            guard.services[0].pid = Some(i32::MAX as u32);
+        }
+        let state = McpState {
+            app: Arc::clone(&app),
+        };
+        let result =
+            service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Stop)
+                .await
+                .unwrap();
+        assert_eq!(result["content"][0]["text"], "alpha: Running -> Stopping");
+        assert_eq!(result["structuredContent"]["status"], "Stopping");
+        assert_eq!(result["structuredContent"]["changed"], true);
+        assert_eq!(app.lock().await.services[0].status, Status::Stopping);
+    }
+
+    #[tokio::test]
+    async fn stop_service_tool_is_noop_when_already_stopped() {
+        let app = make_app(vec![("alpha", vec![])]);
+        {
+            app.lock().await.services[0].status = Status::Stopped;
+        }
+        let state = McpState {
+            app: Arc::clone(&app),
+        };
+        let result =
+            service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Stop)
+                .await
+                .unwrap();
+        assert_eq!(result["content"][0]["text"], "alpha: Stopped (unchanged)");
+        assert_eq!(result["structuredContent"]["changed"], false);
+        assert_eq!(app.lock().await.services[0].status, Status::Stopped);
+    }
+
+    #[tokio::test]
+    async fn service_action_tool_unknown_service_errors() {
+        let app = make_app(vec![("alpha", vec![])]);
+        let state = McpState { app };
+        let err = service_action_tool(
+            json!({ "service": "missing" }),
+            &state,
+            ServiceAction::Start,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err.message.contains("missing"));
+    }
+
+    #[tokio::test]
+    async fn service_action_tool_missing_service_arg_errors() {
+        let app = make_app(vec![("alpha", vec![])]);
+        let state = McpState { app };
+        let err = service_action_tool(json!({}), &state, ServiceAction::Stop)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, -32602);
+    }
+
+    #[tokio::test]
+    async fn handle_tools_call_dispatches_start_and_stop() {
+        let app = make_app(vec![("alpha", vec![])]);
+        app.lock().await.services[0].pid = Some(i32::MAX as u32);
+        let state = McpState { app };
+        let started = handle_tools_call(
+            json!({ "name": "start_service", "arguments": { "service": "alpha" } }),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(started["structuredContent"]["changed"], false);
+        let stopped = handle_tools_call(
+            json!({ "name": "stop_service", "arguments": { "service": "alpha" } }),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(stopped["structuredContent"]["status"], "Stopping");
     }
 
     #[tokio::test]

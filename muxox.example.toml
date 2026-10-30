@@ -15,7 +15,8 @@ after_stop   = "./example/scripts/shutdown-post.sh"
 
 # Optional embedded MCP (Model Context Protocol) server.  When enabled, muxox
 # exposes a JSON-RPC endpoint at http://{bind}:{port}/mcp that lets MCP-aware
-# agents list services and read their captured logs.  Available in web mode
+# agents list services, read their captured logs, and start or stop a service
+# by name.  Available in web mode
 # (default) and raw mode (`muxox --raw`).
 # [mcp]
 # enabled = true

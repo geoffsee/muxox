@@ -25,8 +25,8 @@ pub struct Config {
     pub muxox_version: Option<String>,
     pub service: Vec<ServiceCfg>,
     /// Optional MCP (Model Context Protocol) server settings.  Disabled by
-    /// default; enable with `[mcp] enabled = true` to expose service status
-    /// and logs to MCP-compatible agents over HTTP.
+    /// default; enable with `[mcp] enabled = true` to expose service status,
+    /// logs, and start/stop controls to MCP-compatible agents over HTTP.
     #[serde(default)]
     pub mcp: McpCfg,
     /// Optional global lifecycle hooks run once at Muxox boot / shutdown.
@@ -61,8 +61,8 @@ pub struct HooksCfg {
 /// Settings for the embedded MCP (Model Context Protocol) server.
 ///
 /// When `enabled = true`, muxox exposes a JSON-RPC 2.0 endpoint at
-/// `http://{bind}:{port}/mcp` that lets MCP-compatible agents list services
-/// and retrieve their captured logs without scraping the web UI.
+/// `http://{bind}:{port}/mcp` that lets MCP-compatible agents list services,
+/// retrieve their captured logs, and start or stop a service by name.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct McpCfg {
     /// Whether to start the embedded MCP server.  Default: `false`.

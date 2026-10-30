@@ -3,7 +3,7 @@
 Run all your dev services from one terminal.
 
 <p align="center">
-  <img src="https://github.com/geoffsee/muxox/blob/master/muxox.png?raw=true" width="66%" />
+  <img src="https://github.com/geoffsee/muxox/blob/main/muxox.png?raw=true" width="66%" />
 </p>
 
 `muxox` is a cli-based service orchestrator that makes it easy to start, stop, and monitor multiple processes during development—without juggling a bunch of windows or tabs.

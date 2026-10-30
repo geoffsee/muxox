@@ -75,7 +75,64 @@
             case "Status":
                 updateStatus(msg.idx, msg.status);
                 break;
+            case "Resources":
+                updateResources(msg.idx, msg.resources);
+                break;
         }
+    }
+
+    // Keep in sync with format_cpu / format_bytes / format_resources in resources.rs.
+    function formatCpu(percent) {
+        const n = Number.isFinite(percent) && percent > 0 ? percent : 0;
+        return n.toFixed(1) + "%";
+    }
+
+    function formatBytes(bytes) {
+        const units = ["B", "KB", "MB", "GB", "TB"];
+        let value = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
+        let unit = 0;
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit += 1;
+        }
+        if (unit === 0) return Math.round(value) + " B";
+        return value.toFixed(1) + " " + units[unit];
+    }
+
+    function formatResources(resources) {
+        let text = formatCpu(resources.cpu_percent) + " \u00b7 " + formatBytes(resources.memory_bytes);
+        const gpu = resources.gpu_percent;
+        const gpuMem = resources.gpu_memory_bytes;
+        const hasGpu = gpu !== null && gpu !== undefined;
+        const hasGpuMem = gpuMem !== null && gpuMem !== undefined;
+        if (hasGpu && hasGpuMem) {
+            text += " \u00b7 GPU " + formatCpu(gpu) + " \u00b7 " + formatBytes(gpuMem);
+        } else if (hasGpu) {
+            text += " \u00b7 GPU " + formatCpu(gpu);
+        } else if (hasGpuMem) {
+            text += " \u00b7 GPU " + formatBytes(gpuMem);
+        }
+        return text;
+    }
+
+    function statusShowsResources(status) {
+        return status === "Running" || status === "Stopping";
+    }
+
+    function applyResources(el, resources, status) {
+        const show = resources && statusShowsResources(status);
+        const hint = "CPU, memory, and GPU for this service and its child processes";
+        el.hidden = !show;
+        el.textContent = show ? formatResources(resources) : "";
+        el.title = show ? formatResources(resources) + ". " + hint : hint;
+    }
+
+    function updateResources(idx, resources) {
+        const el = document.getElementById(`resources-${idx}`);
+        const badge = document.getElementById(`badge-${idx}`);
+        if (!el || !badge) return;
+        const status = [...badge.classList].find((cls) => cls !== "status-badge") || "";
+        applyResources(el, resources, status);
     }
 
     const ANSI_RE = /\x1b\[([0-9;]*)m/g;
@@ -225,6 +282,11 @@
         const busy = status === "Starting" || status === "Stopping";
         if (startBtn) startBtn.disabled = status === "Running" || busy;
         if (stopBtn) stopBtn.disabled = status === "Stopped" || busy;
+
+        if (!statusShowsResources(status)) {
+            const resourcesEl = document.getElementById(`resources-${idx}`);
+            if (resourcesEl) applyResources(resourcesEl, null, status);
+        }
     }
 
     function createServiceBox(svc, idx) {
@@ -252,6 +314,12 @@
         label.textContent = svc.name;
         name.append(termIcon, label, badge);
 
+        const resourcesEl = document.createElement("span");
+        resourcesEl.id = `resources-${idx}`;
+        resourcesEl.className = "service-resources";
+        resourcesEl.title = "CPU, memory, and GPU for this service and its child processes";
+        applyResources(resourcesEl, svc.resources, svc.status);
+
         const controls = document.createElement("div");
         controls.className = "controls";
 
@@ -276,7 +344,7 @@
         followBtn.hidden = true;
 
         controls.append(followBtn, startBtn, stopBtn);
-        header.append(name, controls);
+        header.append(name, resourcesEl, controls);
 
         const logArea = document.createElement("div");
         logArea.className = "log-area";

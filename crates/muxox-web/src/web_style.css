@@ -148,6 +148,23 @@ header {
     min-width: 4ch;
 }
 
+.service-resources {
+    flex-shrink: 0;
+    min-width: 0;
+    max-width: 46ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+
+.service-resources[hidden] {
+    display: none;
+}
+
 .status-badge {
     font-size: 0.7rem;
     font-weight: 500;

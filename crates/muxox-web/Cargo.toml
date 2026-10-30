@@ -18,3 +18,4 @@ axum = { version = "0.8", features = ["ws"] }
 dioxus = { version = "0.7", features = ["fullstack", "ssr"] }
 open = "5"
 futures-util = "0.3"
+sysinfo = { version = "0.40.1", default-features = false, features = ["system", "gpu"] }

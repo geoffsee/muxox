@@ -1,4 +1,5 @@
 pub mod mcp;
+mod resources;
 mod ui;
 mod web;
 mod ws_proto;
@@ -7,4 +8,4 @@ mod ws_proto;
 mod ws_proto_tests;
 
 pub use mcp::run_mcp_server;
-pub use web::run_web_mode;
+pub use web::{empty_resource_slots, run_web_mode, spawn_resource_sampler};

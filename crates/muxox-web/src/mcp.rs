@@ -9,6 +9,7 @@
 //! agents inspect muxox-managed services, read their captured logs, and start
 //! or stop a service by name.
 
+use crate::resources::{self, Resources};
 use anyhow::Result;
 use axum::{
     Json, Router,
@@ -17,7 +18,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
-use muxox_core::app::{self, App};
+use muxox_core::app::{self, App, Status};
 use muxox_core::config::McpCfg;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -82,6 +83,9 @@ impl JsonRpcError {
 #[derive(Clone)]
 pub struct McpState {
     pub app: Arc<Mutex<App>>,
+    /// Latest CPU, memory, and GPU sample per service index. Empty until a sampler
+    /// is running. `None` slots mean "no sample" (stopped, or not yet primed).
+    pub resources: Arc<Mutex<Vec<Option<Resources>>>>,
 }
 
 pub fn router(state: Arc<McpState>) -> Router {
@@ -154,7 +158,7 @@ fn handle_initialize(params: &Value) -> Value {
             "name": "muxox",
             "version": env!("CARGO_PKG_VERSION"),
         },
-        "instructions": "Use `list_services` to discover managed services, `get_logs` to retrieve their captured stdout/stderr, and `start_service` or `stop_service` to start or stop one service by name.",
+        "instructions": "Use `list_services` to discover managed services, `inspect` for one service's status, command, and resource usage, `get_logs` to retrieve captured stdout/stderr, and `start_service` or `stop_service` to start or stop one service by name.",
     })
 }
 
@@ -167,6 +171,21 @@ fn handle_tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {},
+                    "additionalProperties": false
+                }
+            },
+            {
+                "name": "inspect",
+                "description": "Return one service's status, pid, command, working directory, log buffer size, and latest CPU, memory, and GPU sample. resources is null when the service is not running or the first sample is not ready yet. gpu_percent and gpu_memory_bytes are null when that reading is unavailable.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "service": {
+                            "type": "string",
+                            "description": "Service name as defined in muxox.toml."
+                        }
+                    },
+                    "required": ["service"],
                     "additionalProperties": false
                 }
             },
@@ -241,6 +260,7 @@ async fn handle_tools_call(
 
     match name {
         "list_services" => list_services_tool(state).await,
+        "inspect" => inspect_tool(args, state).await,
         "get_logs" => get_logs_tool(args, state).await,
         "start_service" => service_action_tool(args, state, ServiceAction::Start).await,
         "stop_service" => service_action_tool(args, state, ServiceAction::Stop).await,
@@ -275,6 +295,77 @@ async fn list_services_tool(state: &McpState) -> std::result::Result<Value, Json
         "content": [{ "type": "text", "text": pretty }],
         "structuredContent": { "services": services },
     }))
+}
+
+async fn inspect_tool(args: Value, state: &McpState) -> std::result::Result<Value, JsonRpcError> {
+    let service_name = require_service_name(&args)?;
+    let app = state.app.lock().await;
+    let idx = find_service(&app, &service_name)?;
+    let svc = &app.services[idx];
+    let slots = state.resources.lock().await;
+    let sampled = slots.get(idx).copied().flatten();
+    let resources = if matches!(svc.status, Status::Running | Status::Stopping) {
+        sampled
+    } else {
+        None
+    };
+    let pid = svc.pid;
+    let status = svc.status.as_str();
+    let cwd = svc.cfg.cwd.as_ref().map(|path| path.display().to_string());
+    let resource_text = match resources {
+        Some(sample) => resources::format_resources(sample),
+        None => "n/a".to_string(),
+    };
+    let pid_text = pid
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let text = format!("{service_name}: {status} pid={pid_text} resources={resource_text}");
+    let resources_json = resources.map(|sample| {
+        json!({
+            "cpu_percent": sample.cpu_percent,
+            "memory_bytes": sample.memory_bytes,
+            "gpu_percent": sample.gpu_percent,
+            "gpu_memory_bytes": sample.gpu_memory_bytes,
+        })
+    });
+
+    Ok(json!({
+        "content": [{ "type": "text", "text": text }],
+        "structuredContent": {
+            "service": {
+                "index": idx,
+                "name": svc.cfg.name,
+                "status": status,
+                "pid": pid,
+                "cmd": svc.cfg.cmd,
+                "cwd": cwd,
+                "interactive": svc.cfg.interactive,
+                "pty": svc.cfg.pty,
+                "log_lines": svc.log.len(),
+                "log_capacity": svc.cfg.log_capacity,
+                "isolation": {
+                    "process": svc.cfg.isolation.process,
+                    "filesystem": svc.cfg.isolation.filesystem,
+                    "network": svc.cfg.isolation.network,
+                },
+                "resources": resources_json,
+            }
+        },
+    }))
+}
+
+fn require_service_name(args: &Value) -> std::result::Result<String, JsonRpcError> {
+    args.get("service")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| JsonRpcError::invalid_params("missing 'service' argument"))
+}
+
+fn find_service(app: &App, service_name: &str) -> std::result::Result<usize, JsonRpcError> {
+    app.services
+        .iter()
+        .position(|s| s.cfg.name == service_name)
+        .ok_or_else(|| JsonRpcError::invalid_params(format!("service not found: {service_name}")))
 }
 
 async fn get_logs_tool(args: Value, state: &McpState) -> std::result::Result<Value, JsonRpcError> {
@@ -392,8 +483,12 @@ async fn service_action_tool(
 
 /// Bind and serve the MCP server.  Runs forever; intended to be spawned as a
 /// background task.
-pub async fn run_mcp_server(cfg: McpCfg, app: Arc<Mutex<App>>) -> Result<()> {
-    let state = Arc::new(McpState { app });
+pub async fn run_mcp_server(
+    cfg: McpCfg,
+    app: Arc<Mutex<App>>,
+    resources: Arc<Mutex<Vec<Option<Resources>>>>,
+) -> Result<()> {
+    let state = Arc::new(McpState { app, resources });
     let router = router(state);
 
     let addr: SocketAddr = format!("{}:{}", cfg.bind, cfg.port).parse()?;
@@ -449,6 +544,13 @@ mod tests {
         }))
     }
 
+    fn test_state(app: Arc<Mutex<App>>) -> McpState {
+        McpState {
+            app,
+            resources: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
     #[test]
     fn initialize_echoes_protocol_version() {
         let v = handle_initialize(&json!({ "protocolVersion": "2025-06-18" }));
@@ -472,6 +574,7 @@ mod tests {
             .map(|t| t["name"].as_str().unwrap())
             .collect();
         assert!(names.contains(&"list_services"));
+        assert!(names.contains(&"inspect"));
         assert!(names.contains(&"get_logs"));
         assert!(names.contains(&"start_service"));
         assert!(names.contains(&"stop_service"));
@@ -480,7 +583,7 @@ mod tests {
     #[tokio::test]
     async fn list_services_tool_returns_all_services() {
         let app = make_app(vec![("alpha", vec!["a1", "a2"]), ("beta", vec!["b1"])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let result = list_services_tool(&state).await.unwrap();
         let services = result["structuredContent"]["services"].as_array().unwrap();
         assert_eq!(services.len(), 2);
@@ -493,7 +596,7 @@ mod tests {
     #[tokio::test]
     async fn get_logs_tool_returns_tail() {
         let app = make_app(vec![("svc", vec!["one", "two", "three", "four", "five"])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let result = get_logs_tool(json!({ "service": "svc", "tail": 2 }), &state)
             .await
             .unwrap();
@@ -508,7 +611,7 @@ mod tests {
             "svc",
             vec!["error: a", "info: b", "error: c", "warn: d", "error: e"],
         )]);
-        let state = McpState { app };
+        let state = test_state(app);
         let result = get_logs_tool(
             json!({ "service": "svc", "tail": 2, "grep": "error" }),
             &state,
@@ -523,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn get_logs_tool_unknown_service_errors() {
         let app = make_app(vec![("svc", vec!["x"])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let err = get_logs_tool(json!({ "service": "missing" }), &state)
             .await
             .unwrap_err();
@@ -534,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn get_logs_tool_missing_service_arg_errors() {
         let app = make_app(vec![("svc", vec!["x"])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let err = get_logs_tool(json!({}), &state).await.unwrap_err();
         assert_eq!(err.code, -32602);
     }
@@ -542,7 +645,7 @@ mod tests {
     #[tokio::test]
     async fn handle_tools_call_dispatches_known_tools() {
         let app = make_app(vec![("svc", vec!["x"])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let v = handle_tools_call(json!({ "name": "list_services", "arguments": {} }), &state)
             .await
             .unwrap();
@@ -557,9 +660,7 @@ mod tests {
             guard.services[0].status = Status::Stopped;
             guard.services[0].cfg.cmd = "true".into();
         }
-        let state = McpState {
-            app: Arc::clone(&app),
-        };
+        let state = test_state(Arc::clone(&app));
         let result =
             service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Start)
                 .await
@@ -575,7 +676,7 @@ mod tests {
     #[tokio::test]
     async fn start_service_tool_is_noop_when_already_running() {
         let app = make_app(vec![("alpha", vec![])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let result =
             service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Start)
                 .await
@@ -592,9 +693,7 @@ mod tests {
             let mut guard = app.lock().await;
             guard.services[1].status = Status::Stopped;
         }
-        let state = McpState {
-            app: Arc::clone(&app),
-        };
+        let state = test_state(Arc::clone(&app));
         let result = service_action_tool(json!({ "service": "dup" }), &state, ServiceAction::Start)
             .await
             .unwrap();
@@ -613,9 +712,7 @@ mod tests {
             // Nonexistent pid: terminate signals this id, not a live process.
             guard.services[0].pid = Some(i32::MAX as u32);
         }
-        let state = McpState {
-            app: Arc::clone(&app),
-        };
+        let state = test_state(Arc::clone(&app));
         let result =
             service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Stop)
                 .await
@@ -632,9 +729,7 @@ mod tests {
         {
             app.lock().await.services[0].status = Status::Stopped;
         }
-        let state = McpState {
-            app: Arc::clone(&app),
-        };
+        let state = test_state(Arc::clone(&app));
         let result =
             service_action_tool(json!({ "service": "alpha" }), &state, ServiceAction::Stop)
                 .await
@@ -647,7 +742,7 @@ mod tests {
     #[tokio::test]
     async fn service_action_tool_unknown_service_errors() {
         let app = make_app(vec![("alpha", vec![])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let err = service_action_tool(
             json!({ "service": "missing" }),
             &state,
@@ -662,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn service_action_tool_missing_service_arg_errors() {
         let app = make_app(vec![("alpha", vec![])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let err = service_action_tool(json!({}), &state, ServiceAction::Stop)
             .await
             .unwrap_err();
@@ -673,7 +768,7 @@ mod tests {
     async fn handle_tools_call_dispatches_start_and_stop() {
         let app = make_app(vec![("alpha", vec![])]);
         app.lock().await.services[0].pid = Some(i32::MAX as u32);
-        let state = McpState { app };
+        let state = test_state(app);
         let started = handle_tools_call(
             json!({ "name": "start_service", "arguments": { "service": "alpha" } }),
             &state,
@@ -691,9 +786,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inspect_tool_returns_details_and_resource_sample() {
+        let app = make_app(vec![("alpha", vec!["line"])]);
+        {
+            let mut guard = app.lock().await;
+            guard.services[0].pid = Some(42);
+            guard.services[0].cfg.cmd = "sleep 30".into();
+            guard.services[0].cfg.cwd = Some("packages/alpha".into());
+            guard.services[0].cfg.isolation.process = true;
+        }
+        let state = McpState {
+            app,
+            resources: Arc::new(Mutex::new(vec![Some(Resources {
+                cpu_percent: 1.5,
+                memory_bytes: 2048,
+                gpu_percent: None,
+                gpu_memory_bytes: None,
+            })])),
+        };
+        let result = inspect_tool(json!({ "service": "alpha" }), &state)
+            .await
+            .unwrap();
+        let service = &result["structuredContent"]["service"];
+        assert_eq!(service["index"], 0);
+        assert_eq!(service["name"], "alpha");
+        assert_eq!(service["status"], "Running");
+        assert_eq!(service["pid"], 42);
+        assert_eq!(service["cmd"], "sleep 30");
+        assert_eq!(service["cwd"], "packages/alpha");
+        assert_eq!(service["log_lines"], 1);
+        assert_eq!(service["isolation"]["process"], true);
+        assert_eq!(service["resources"]["cpu_percent"], 1.5);
+        assert_eq!(service["resources"]["memory_bytes"], 2048);
+        assert!(service["resources"]["gpu_percent"].is_null());
+        assert!(service["resources"]["gpu_memory_bytes"].is_null());
+        assert_eq!(
+            result["content"][0]["text"],
+            "alpha: Running pid=42 resources=1.5% · 2.0 KB"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_tool_appends_gpu_when_present() {
+        let app = make_app(vec![("alpha", vec![])]);
+        app.lock().await.services[0].pid = Some(42);
+        let state = McpState {
+            app,
+            resources: Arc::new(Mutex::new(vec![Some(Resources {
+                cpu_percent: 1.5,
+                memory_bytes: 2048,
+                gpu_percent: Some(12.0),
+                gpu_memory_bytes: Some(256 * 1024 * 1024),
+            })])),
+        };
+        let result = inspect_tool(json!({ "service": "alpha" }), &state)
+            .await
+            .unwrap();
+        let resources = &result["structuredContent"]["service"]["resources"];
+        assert_eq!(resources["gpu_percent"], 12.0);
+        assert_eq!(resources["gpu_memory_bytes"], 256 * 1024 * 1024);
+        assert_eq!(
+            result["content"][0]["text"],
+            "alpha: Running pid=42 resources=1.5% · 2.0 KB · GPU 12.0% · 256.0 MB"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_tool_hides_stale_resources_when_stopped() {
+        let app = make_app(vec![("alpha", vec![])]);
+        app.lock().await.services[0].status = Status::Stopped;
+        let state = McpState {
+            app,
+            resources: Arc::new(Mutex::new(vec![Some(Resources {
+                cpu_percent: 9.0,
+                memory_bytes: 100,
+                gpu_percent: Some(3.0),
+                gpu_memory_bytes: Some(64),
+            })])),
+        };
+        let result = inspect_tool(json!({ "service": "alpha" }), &state)
+            .await
+            .unwrap();
+        assert!(result["structuredContent"]["service"]["resources"].is_null());
+        assert_eq!(
+            result["content"][0]["text"],
+            "alpha: Stopped pid=none resources=n/a"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_tool_reports_no_sample_yet() {
+        let app = make_app(vec![("alpha", vec![])]);
+        app.lock().await.services[0].pid = Some(7);
+        let state = test_state(app);
+        let result = inspect_tool(json!({ "service": "alpha" }), &state)
+            .await
+            .unwrap();
+        assert!(result["structuredContent"]["service"]["resources"].is_null());
+        assert_eq!(
+            result["content"][0]["text"],
+            "alpha: Running pid=7 resources=n/a"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_tool_unknown_service_and_missing_arg_error() {
+        let app = make_app(vec![("alpha", vec![])]);
+        let state = test_state(app);
+        let missing = inspect_tool(json!({ "service": "nope" }), &state)
+            .await
+            .unwrap_err();
+        assert_eq!(missing.code, -32602);
+        assert!(missing.message.contains("nope"));
+        let no_arg = inspect_tool(json!({}), &state).await.unwrap_err();
+        assert_eq!(no_arg.code, -32602);
+    }
+
+    #[tokio::test]
+    async fn handle_tools_call_dispatches_inspect() {
+        let app = make_app(vec![("alpha", vec![])]);
+        let state = test_state(app);
+        let result = handle_tools_call(
+            json!({ "name": "inspect", "arguments": { "service": "alpha" } }),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["structuredContent"]["service"]["name"], "alpha");
+    }
+
+    #[tokio::test]
     async fn handle_tools_call_unknown_tool_errors() {
         let app = make_app(vec![("svc", vec!["x"])]);
-        let state = McpState { app };
+        let state = test_state(app);
         let err = handle_tools_call(json!({ "name": "nope" }), &state)
             .await
             .unwrap_err();

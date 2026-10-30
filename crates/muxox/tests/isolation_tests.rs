@@ -20,6 +20,7 @@ fn iso_cfg(name: &str, cmd: &str, isolation: IsolationCfg) -> ServiceCfg {
         env_file: None,
         isolation,
         hooks: Default::default(),
+        monitor: None,
     }
 }
 
@@ -363,6 +364,7 @@ mod macos {
                 network: false,
             },
             hooks: Default::default(),
+            monitor: None,
         };
 
         let sandbox = Sandbox;
@@ -414,6 +416,7 @@ mod macos {
                 network: false,
             },
             hooks: Default::default(),
+            monitor: None,
         };
 
         let sandbox = Sandbox;
@@ -467,6 +470,7 @@ mod macos {
                 network: true,
             },
             hooks: Default::default(),
+            monitor: None,
         };
 
         let sandbox = Sandbox;

@@ -9,17 +9,85 @@ use serde::Serialize;
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
 
 /// CPU, resident memory, and GPU for one service.
+///
+/// A field is `None` when that service's `monitor` table does not ask for it,
+/// or when the platform has no reading. Disabled fields stay absent instead of
+/// becoming zero.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Resources {
     /// Percent of one core since the previous sample. Above 100 on multi-core.
-    pub cpu_percent: f32,
+    pub cpu_percent: Option<f32>,
     /// Resident set size in bytes, summed across the process tree.
-    pub memory_bytes: u64,
+    pub memory_bytes: Option<u64>,
     /// Share of all GPUs since the previous sample. `None` when unavailable.
     pub gpu_percent: Option<f32>,
     /// GPU memory in bytes, summed across the process tree. Not strictly VRAM.
     /// `None` when unavailable. macOS never reports this.
     pub gpu_memory_bytes: Option<u64>,
+}
+
+impl Resources {
+    /// Drop fields this service did not ask for. `None` when nothing remains.
+    pub(crate) fn mask(self, cpu: bool, memory: bool, gpu: bool) -> Option<Self> {
+        let masked = Self {
+            cpu_percent: cpu.then_some(self.cpu_percent).flatten(),
+            memory_bytes: memory.then_some(self.memory_bytes).flatten(),
+            gpu_percent: gpu.then_some(self.gpu_percent).flatten(),
+            gpu_memory_bytes: gpu.then_some(self.gpu_memory_bytes).flatten(),
+        };
+        masked.has_reading().then_some(masked)
+    }
+
+    fn has_reading(self) -> bool {
+        self.cpu_percent.is_some()
+            || self.memory_bytes.is_some()
+            || self.gpu_percent.is_some()
+            || self.gpu_memory_bytes.is_some()
+    }
+}
+
+/// One service's process tree and which readings to keep.
+#[derive(Debug, Clone, Copy)]
+pub struct SampleQuery {
+    pub root: Option<u32>,
+    pub cpu: bool,
+    pub memory: bool,
+    pub gpu: bool,
+}
+
+impl SampleQuery {
+    /// This service is running and asked for at least one reading.
+    pub fn wants_refresh(self) -> bool {
+        self.root.is_some() && (self.cpu || self.memory || self.gpu)
+    }
+}
+
+/// Union of readings needed by live, opted-in services.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RefreshPlan {
+    pub cpu: bool,
+    pub memory: bool,
+    pub gpu: bool,
+}
+
+/// `None` when no live service asked for a reading, so the caller can skip
+/// the process scan.
+pub(crate) fn refresh_plan(queries: &[SampleQuery]) -> Option<RefreshPlan> {
+    let mut plan = RefreshPlan {
+        cpu: false,
+        memory: false,
+        gpu: false,
+    };
+    for query in queries
+        .iter()
+        .copied()
+        .filter(|query| query.wants_refresh())
+    {
+        plan.cpu |= query.cpu;
+        plan.memory |= query.memory;
+        plan.gpu |= query.gpu;
+    }
+    (plan.cpu || plan.memory || plan.gpu).then_some(plan)
 }
 
 struct ProcSample {
@@ -41,7 +109,7 @@ struct ProcSample {
 ///
 /// A GPU field stays `None` when every counted process lacks that reading.
 /// Once any process reports it, missing siblings count as zero.
-fn sum_tree(procs: &[ProcSample], root: u32) -> Option<Resources> {
+fn sum_tree(procs: &[ProcSample], root: u32) -> Option<TreeUsage> {
     let mut by_pid = std::collections::HashMap::<u32, &ProcSample>::new();
     let mut children = std::collections::HashMap::<u32, Vec<u32>>::new();
     for proc in procs {
@@ -79,12 +147,30 @@ fn sum_tree(procs: &[ProcSample], root: u32) -> Option<Resources> {
             stack.extend(kids.iter().copied());
         }
     }
-    Some(Resources {
+    Some(TreeUsage {
         cpu_percent,
         memory_bytes,
         gpu_percent,
         gpu_memory_bytes,
     })
+}
+
+#[derive(Clone, Copy)]
+struct TreeUsage {
+    cpu_percent: f32,
+    memory_bytes: u64,
+    gpu_percent: Option<f32>,
+    gpu_memory_bytes: Option<u64>,
+}
+
+fn project(usage: TreeUsage, query: SampleQuery) -> Option<Resources> {
+    Resources {
+        cpu_percent: query.cpu.then_some(usage.cpu_percent),
+        memory_bytes: query.memory.then_some(usage.memory_bytes),
+        gpu_percent: query.gpu.then_some(usage.gpu_percent).flatten(),
+        gpu_memory_bytes: query.gpu.then_some(usage.gpu_memory_bytes).flatten(),
+    }
+    .mask(query.cpu, query.memory, query.gpu)
 }
 
 fn add_gpu_percent(total: &mut Option<f32>, sample: Option<f32>) {
@@ -119,21 +205,22 @@ impl Sampler {
         })
     }
 
-    /// Sample each root pid. The first call only primes CPU counters and
-    /// returns `None` for every root. Later calls return `None` when that
-    /// root is missing or was not requested.
-    pub fn sample(&mut self, roots: &[Option<u32>]) -> Vec<Option<Resources>> {
-        let kind = ProcessRefreshKind::nothing()
-            .with_cpu()
-            .with_memory()
-            .with_gpu_usage()
-            .with_gpu_memory()
-            .without_tasks();
+    /// Sample each query. The first call only primes counters and returns
+    /// `None` for every query. Later calls return `None` when that root is
+    /// missing, was not requested, or every requested reading is absent.
+    ///
+    /// The refresh includes CPU, memory, or GPU only when some live query
+    /// asked for it. An empty plan skips the process scan.
+    pub fn sample(&mut self, queries: &[SampleQuery]) -> Vec<Option<Resources>> {
+        let Some(plan) = refresh_plan(queries) else {
+            return vec![None; queries.len()];
+        };
+        let kind = kind_for(plan);
         self.sys
             .refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
         if !self.primed {
             self.primed = true;
-            return vec![None; roots.len()];
+            return vec![None; queries.len()];
         }
 
         let procs: Vec<ProcSample> = self
@@ -150,11 +237,30 @@ impl Sampler {
                 is_thread: proc.thread_kind().is_some(),
             })
             .collect();
-        roots
+        queries
             .iter()
-            .map(|root| root.and_then(|pid| sum_tree(&procs, pid)))
+            .map(|query| {
+                query
+                    .root
+                    .and_then(|pid| sum_tree(&procs, pid))
+                    .and_then(|usage| project(usage, *query))
+            })
             .collect()
     }
+}
+
+fn kind_for(plan: RefreshPlan) -> ProcessRefreshKind {
+    let mut kind = ProcessRefreshKind::nothing();
+    if plan.cpu {
+        kind = kind.with_cpu();
+    }
+    if plan.memory {
+        kind = kind.with_memory();
+    }
+    if plan.gpu {
+        kind = kind.with_gpu_usage().with_gpu_memory();
+    }
+    kind.without_tasks()
 }
 
 /// Same rules as `formatCpu` / `formatBytes` in `web_script.js`.
@@ -167,31 +273,25 @@ pub(crate) fn format_cpu(percent: f32) -> String {
     format!("{percent:.1}%")
 }
 
-/// Header and `inspect` text. GPU segments appear only when that reading exists.
+/// Header and `inspect` text. A field is omitted when it is `None`.
 pub(crate) fn format_resources(sample: Resources) -> String {
-    let mut text = format!(
-        "{} · {}",
-        format_cpu(sample.cpu_percent),
-        format_bytes(sample.memory_bytes)
-    );
+    let mut parts = Vec::new();
+    if let Some(percent) = sample.cpu_percent {
+        parts.push(format_cpu(percent));
+    }
+    if let Some(bytes) = sample.memory_bytes {
+        parts.push(format_bytes(bytes));
+    }
     match (sample.gpu_percent, sample.gpu_memory_bytes) {
         (None, None) => {}
-        (Some(percent), None) => {
-            text.push_str(" · GPU ");
-            text.push_str(&format_cpu(percent));
-        }
-        (None, Some(bytes)) => {
-            text.push_str(" · GPU ");
-            text.push_str(&format_bytes(bytes));
-        }
+        (Some(percent), None) => parts.push(format!("GPU {}", format_cpu(percent))),
+        (None, Some(bytes)) => parts.push(format!("GPU {}", format_bytes(bytes))),
         (Some(percent), Some(bytes)) => {
-            text.push_str(" · GPU ");
-            text.push_str(&format_cpu(percent));
-            text.push_str(" · ");
-            text.push_str(&format_bytes(bytes));
+            parts.push(format!("GPU {}", format_cpu(percent)));
+            parts.push(format_bytes(bytes));
         }
     }
-    text
+    parts.join(" · ")
 }
 
 /// Binary units. Bytes are an integer. Larger units keep one decimal.
@@ -295,8 +395,8 @@ mod tests {
         assert_eq!(format_bytes(1536), "1.5 KB");
         assert_eq!(format_bytes(48 * 1024 * 1024), "48.0 MB");
         let base = Resources {
-            cpu_percent: 1.5,
-            memory_bytes: 2048,
+            cpu_percent: Some(1.5),
+            memory_bytes: Some(2048),
             gpu_percent: None,
             gpu_memory_bytes: None,
         };
@@ -323,6 +423,125 @@ mod tests {
             }),
             "1.5% · 2.0 KB · GPU 512 B"
         );
+        assert_eq!(
+            format_resources(Resources {
+                cpu_percent: None,
+                ..base
+            }),
+            "2.0 KB"
+        );
+        assert_eq!(
+            format_resources(Resources {
+                memory_bytes: None,
+                gpu_percent: Some(12.0),
+                ..base
+            }),
+            "1.5% · GPU 12.0%"
+        );
+        assert_eq!(
+            format_resources(Resources {
+                cpu_percent: None,
+                memory_bytes: None,
+                gpu_memory_bytes: Some(512),
+                ..base
+            }),
+            "GPU 512 B"
+        );
+    }
+
+    #[test]
+    fn refresh_plan_is_the_union_of_live_requests() {
+        let stopped = SampleQuery {
+            root: None,
+            cpu: true,
+            memory: true,
+            gpu: true,
+        };
+        assert_eq!(refresh_plan(&[stopped]), None);
+        assert_eq!(
+            refresh_plan(&[SampleQuery {
+                root: Some(1),
+                cpu: false,
+                memory: false,
+                gpu: false,
+            }]),
+            None
+        );
+        assert_eq!(
+            refresh_plan(&[
+                SampleQuery {
+                    root: Some(1),
+                    cpu: true,
+                    memory: false,
+                    gpu: false,
+                },
+                stopped,
+            ]),
+            Some(RefreshPlan {
+                cpu: true,
+                memory: false,
+                gpu: false,
+            })
+        );
+        assert_eq!(
+            refresh_plan(&[
+                SampleQuery {
+                    root: Some(1),
+                    cpu: false,
+                    memory: true,
+                    gpu: false,
+                },
+                SampleQuery {
+                    root: Some(2),
+                    cpu: false,
+                    memory: false,
+                    gpu: true,
+                },
+            ]),
+            Some(RefreshPlan {
+                cpu: false,
+                memory: true,
+                gpu: true,
+            })
+        );
+    }
+
+    #[test]
+    fn project_omits_readings_the_service_did_not_ask_for() {
+        let usage = TreeUsage {
+            cpu_percent: 1.5,
+            memory_bytes: 2048,
+            gpu_percent: Some(12.0),
+            gpu_memory_bytes: None,
+        };
+        let memory_only = project(
+            usage,
+            SampleQuery {
+                root: Some(1),
+                cpu: false,
+                memory: true,
+                gpu: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(memory_only.cpu_percent, None);
+        assert_eq!(memory_only.memory_bytes, Some(2048));
+        assert_eq!(memory_only.gpu_percent, None);
+
+        let gpu_missing = project(
+            TreeUsage {
+                gpu_percent: None,
+                gpu_memory_bytes: None,
+                ..usage
+            },
+            SampleQuery {
+                root: Some(1),
+                cpu: false,
+                memory: false,
+                gpu: true,
+            },
+        );
+        assert!(gpu_missing.is_none());
     }
 
     #[test]
@@ -342,17 +561,23 @@ mod tests {
         let pid = child.0.id();
 
         let mut sampler = Sampler::new().expect("sysinfo");
-        let roots = vec![Some(pid)];
-        assert!(sampler.sample(&roots)[0].is_none());
+        let queries = vec![SampleQuery {
+            root: Some(pid),
+            cpu: true,
+            memory: true,
+            gpu: false,
+        }];
+        assert!(sampler.sample(&queries)[0].is_none());
         std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
-        let sample = sampler.sample(&roots).into_iter().next().unwrap();
+        let sample = sampler.sample(&queries).into_iter().next().unwrap();
         let Some(sample) = sample else {
             panic!("sleep pid {pid} was not visible to sysinfo");
         };
+        let memory_bytes = sample.memory_bytes.expect("memory reading");
         assert!(
-            sample.memory_bytes > 0,
-            "expected rss for pid {pid}, got {}",
-            sample.memory_bytes
+            memory_bytes > 0,
+            "expected rss for pid {pid}, got {memory_bytes}"
         );
+        assert!(sample.gpu_percent.is_none());
     }
 }

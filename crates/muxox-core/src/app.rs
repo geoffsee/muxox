@@ -542,6 +542,7 @@ mod tests {
             env_file: None,
             isolation: Default::default(),
             hooks: Default::default(),
+            monitor: None,
         });
 
         assert_eq!(state.status, Status::Stopped);

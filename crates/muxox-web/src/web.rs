@@ -3,7 +3,7 @@
 // This file is part of muxox, released under the MIT License.
 
 use crate::mcp::run_mcp_server;
-use crate::resources::{Resources, Sampler};
+use crate::resources::{Resources, SampleQuery, Sampler};
 use crate::ui;
 use crate::ws_proto::{ServiceInfo, WsInbound, WsOutbound};
 use anyhow::Result;
@@ -294,11 +294,25 @@ fn service_root(service: &ServiceState) -> Option<u32> {
     }
 }
 
+fn sample_query(service: &ServiceState) -> SampleQuery {
+    let monitor = service.cfg.monitor.as_ref();
+    SampleQuery {
+        root: service_root(service),
+        cpu: monitor.is_some_and(|cfg| cfg.cpu),
+        memory: monitor.is_some_and(|cfg| cfg.memory),
+        gpu: monitor.is_some_and(|cfg| cfg.gpu),
+    }
+}
+
 pub fn empty_resource_slots(count: usize) -> Arc<Mutex<Vec<Option<Resources>>>> {
     Arc::new(Mutex::new(vec![None; count]))
 }
 
-/// Sample every service about once a second.
+/// Sample opted-in services about once a second.
+///
+/// Does nothing when no service has an enabled `monitor` table. A tick also
+/// skips the process scan while no monitored service is running. CPU, memory,
+/// and GPU are included only when some live service asked for that reading.
 ///
 /// `tx` broadcasts header updates to web clients. Pass `None` when only the
 /// shared slots are needed, as in `--raw` mode.
@@ -308,6 +322,19 @@ pub fn spawn_resource_sampler(
     tx: Option<broadcast::Sender<Bytes>>,
 ) {
     task::spawn(async move {
+        {
+            let app = app.lock().await;
+            let enabled = app.services.iter().any(|service| {
+                service
+                    .cfg
+                    .monitor
+                    .as_ref()
+                    .is_some_and(|cfg| cfg.enabled())
+            });
+            if !enabled {
+                return;
+            }
+        }
         let mut sampler = match Sampler::new() {
             Ok(sampler) => sampler,
             Err(e) => {
@@ -319,13 +346,16 @@ pub fn spawn_resource_sampler(
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let roots = {
+            let queries = {
                 let app = app.lock().await;
-                app.services.iter().map(service_root).collect::<Vec<_>>()
+                app.services.iter().map(sample_query).collect::<Vec<_>>()
             };
+            if !queries.iter().any(|query| query.wants_refresh()) {
+                continue;
+            }
             let (sampler_back, samples) = match task::spawn_blocking(move || {
                 let mut sampler = sampler;
-                let samples = sampler.sample(&roots);
+                let samples = sampler.sample(&queries);
                 (sampler, samples)
             })
             .await
@@ -340,7 +370,10 @@ pub fn spawn_resource_sampler(
             let app = app.lock().await;
             let mut slots = resources.lock().await;
             for (idx, sample) in samples.into_iter().enumerate() {
-                let live = app.services.get(idx).and_then(service_root).is_some();
+                let live = app
+                    .services
+                    .get(idx)
+                    .is_some_and(|service| sample_query(service).wants_refresh());
                 let next = if live { sample } else { None };
                 let Some(slot) = slots.get_mut(idx) else {
                     continue;

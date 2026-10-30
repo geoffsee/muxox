@@ -14,6 +14,7 @@ fn test_cfg(name: &str, interactive: bool) -> ServiceCfg {
         env_file: None,
         isolation: Default::default(),
         hooks: Default::default(),
+        monitor: None,
     }
 }
 

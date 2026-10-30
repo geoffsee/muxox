@@ -23,10 +23,11 @@ logs, and start or stop a service by name.
 2. Confirm `[mcp] enabled = true` in `muxox.toml` and use its printed `/mcp` URL.
 3. Call `list_services` first.
 4. Call `inspect` with the exact service name for status, pid, command, and
-   the latest CPU, memory, and GPU sample. `resources` is null until a sample
-   exists, about a second after the process is running, and null when the
-   service is stopped. `gpu_percent` and `gpu_memory_bytes` are null when that
-   reading is unavailable. macOS reports GPU usage only.
+   the latest resource sample. `resources` is null when that service has no
+   `monitor` table, until a sample exists about a second after the process is
+   running, and when the service is stopped. `cpu_percent`, `memory_bytes`,
+   `gpu_percent`, and `gpu_memory_bytes` are null when that reading is
+   disabled or unavailable. macOS reports GPU usage only.
 5. Call `get_logs` for one implicated service at a time, using the smallest
    useful `tail` and a case-sensitive literal `grep` when appropriate.
 6. Call `start_service` or `stop_service` with the exact service name when the
@@ -53,10 +54,12 @@ Call with no arguments. It returns each service's `name`, `status`, `pid`,
 Required argument: exact `service` name. Returns that service's `status`,
 `pid`, `cmd`, `cwd`, log buffer size, isolation flags, and `resources`.
 `resources` is `{ cpu_percent, memory_bytes, gpu_percent, gpu_memory_bytes }`
-for the service process and its children, or null when the service is not
-running or the first sample is not ready yet. CPU is the percent of one core
-since the previous sample. GPU percent is that tree's share of all GPUs.
-GPU fields are null when that reading is unavailable. macOS reports usage only.
+for the service process and its children. It is null when that service has no
+`monitor` table, when the service is not running, or when the first sample is
+not ready yet. Each field is null when that reading is disabled or unavailable.
+CPU is the percent of one core since the previous sample. GPU percent is that
+tree's share of all GPUs. macOS reports GPU usage only. `monitor` defaults
+`cpu` and `memory` to true and `gpu` to false.
 
 ## `get_logs`
 

@@ -143,10 +143,41 @@ pub struct ServiceCfg {
     /// Optional per-service lifecycle hooks.
     #[serde(default)]
     pub hooks: HooksCfg,
+    /// Opt-in CPU, memory, and GPU sampling. Absent means this service is not sampled.
+    #[serde(default)]
+    pub monitor: Option<MonitorCfg>,
 }
 
 fn default_log_capacity() -> usize {
     2000
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Per-service resource sampling. `cpu` and `memory` default to on. `gpu` defaults to off.
+///
+/// The table is opt-in: omit [`ServiceCfg::monitor`] to leave the service unsampled.
+/// A reading is collected only while some running service asks for it.
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+pub struct MonitorCfg {
+    /// Percent of one core for this service and its child processes.
+    #[serde(default = "default_true")]
+    pub cpu: bool,
+    /// Resident memory for this service and its child processes.
+    #[serde(default = "default_true")]
+    pub memory: bool,
+    /// GPU usage and GPU memory. This is the expensive scan, so it stays off
+    /// unless a service sets it.
+    #[serde(default)]
+    pub gpu: bool,
+}
+
+impl MonitorCfg {
+    pub fn enabled(&self) -> bool {
+        self.cpu || self.memory || self.gpu
+    }
 }
 
 /// Per-service isolation settings.  All flags default to `false`
@@ -278,6 +309,40 @@ mod tests {
         "#;
         let cfg: ServiceCfg = toml::from_str(toml_input).unwrap();
         assert_eq!(cfg.log_capacity, 2000);
+        assert!(cfg.monitor.is_none());
+    }
+
+    #[test]
+    fn monitor_defaults_cpu_and_memory_on_and_gpu_off() {
+        let cfg: ServiceCfg = toml::from_str(
+            r#"
+            name = "api"
+            cmd = "true"
+            monitor = {}
+            "#,
+        )
+        .unwrap();
+        let monitor = cfg.monitor.expect("monitor table");
+        assert!(monitor.cpu);
+        assert!(monitor.memory);
+        assert!(!monitor.gpu);
+        assert!(monitor.enabled());
+    }
+
+    #[test]
+    fn monitor_flags_can_turn_fields_off_and_gpu_on() {
+        let cfg: ServiceCfg = toml::from_str(
+            r#"
+            name = "api"
+            cmd = "true"
+            monitor = { cpu = false, memory = true, gpu = true }
+            "#,
+        )
+        .unwrap();
+        let monitor = cfg.monitor.expect("monitor table");
+        assert!(!monitor.cpu);
+        assert!(monitor.memory);
+        assert!(monitor.gpu);
     }
 
     #[test]

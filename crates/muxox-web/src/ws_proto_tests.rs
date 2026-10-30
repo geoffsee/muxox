@@ -157,8 +157,8 @@ mod tests {
                     logs: vec![],
                     interactive: false,
                     resources: Some(crate::resources::Resources {
-                        cpu_percent: 4.0,
-                        memory_bytes: 48 * 1024 * 1024,
+                        cpu_percent: Some(4.0),
+                        memory_bytes: Some(48 * 1024 * 1024),
                         gpu_percent: Some(12.0),
                         gpu_memory_bytes: None,
                     }),
@@ -195,8 +195,8 @@ mod tests {
         let sample = WsOutbound::Resources {
             idx: 1,
             resources: Some(crate::resources::Resources {
-                cpu_percent: 1.5,
-                memory_bytes: 2048,
+                cpu_percent: Some(1.5),
+                memory_bytes: Some(2048),
                 gpu_percent: None,
                 gpu_memory_bytes: None,
             }),

@@ -68,6 +68,9 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 #               (relative paths resolve from the config file's directory).
 # isolation     (table,   optional) Per-service sandboxing flags (see below).
 # hooks         (table,   optional) Per-service lifecycle hooks (see below).
+# monitor       (table,   optional) Opt-in CPU, memory, and GPU sampling.
+#               cpu and memory default to true. gpu defaults to false.
+#               Omit the table to leave this service unsampled.
 #
 # ---------------------------------------------------------------------------
 # Minimal example -- the smallest valid service definition.
@@ -138,6 +141,18 @@ pub const TEMPLATE: &str = r##"# muxox.toml -- service definitions for the muxox
 # cwd  = "./packages/api"
 # hooks = { before_start = "./scripts/api-pre.sh", after_stop = "./scripts/api-cleanup.sh" }
 #
+# ---------------------------------------------------------------------------
+# Resource sampling is off until a service opts in. cpu and memory default
+# to true inside the table. gpu stays off unless set, because that scan walks
+# the whole machine. The sampler runs only while a monitored service is
+# running, and only collects readings some live service asked for.
+# ---------------------------------------------------------------------------
+# [[service]]
+# name = "api"
+# cmd  = "bun run dev"
+# monitor = { cpu = true, memory = true, gpu = false }
+#
+
 # ---------------------------------------------------------------------------
 # Optional embedded MCP (Model Context Protocol) server.
 #

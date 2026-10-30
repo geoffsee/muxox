@@ -83,7 +83,7 @@ impl JsonRpcError {
 #[derive(Clone)]
 pub struct McpState {
     pub app: Arc<Mutex<App>>,
-    /// Latest CPU, memory, and GPU sample per service index. Empty until a sampler
+    /// Latest opted-in resource sample per service index. Empty until a sampler
     /// is running. `None` slots mean "no sample" (stopped, or not yet primed).
     pub resources: Arc<Mutex<Vec<Option<Resources>>>>,
 }
@@ -176,7 +176,7 @@ fn handle_tools_list() -> Value {
             },
             {
                 "name": "inspect",
-                "description": "Return one service's status, pid, command, working directory, log buffer size, and latest CPU, memory, and GPU sample. resources is null when the service is not running or the first sample is not ready yet. gpu_percent and gpu_memory_bytes are null when that reading is unavailable.",
+                "description": "Return one service's status, pid, command, working directory, log buffer size, and latest resource sample. resources is null when monitoring is off, the service is not running, or the first sample is not ready yet. cpu_percent, memory_bytes, gpu_percent, and gpu_memory_bytes are null when that reading is disabled or unavailable.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -305,7 +305,11 @@ async fn inspect_tool(args: Value, state: &McpState) -> std::result::Result<Valu
     let slots = state.resources.lock().await;
     let sampled = slots.get(idx).copied().flatten();
     let resources = if matches!(svc.status, Status::Running | Status::Stopping) {
-        sampled
+        svc.cfg
+            .monitor
+            .as_ref()
+            .filter(|cfg| cfg.enabled())
+            .and_then(|cfg| sampled.and_then(|sample| sample.mask(cfg.cpu, cfg.memory, cfg.gpu)))
     } else {
         None
     };
@@ -504,7 +508,7 @@ pub async fn run_mcp_server(
 mod tests {
     use super::*;
     use muxox_core::app::{App, AppMsg, ServiceState, Status};
-    use muxox_core::config::ServiceCfg;
+    use muxox_core::config::{MonitorCfg, ServiceCfg};
     use muxox_core::isolation::default_isolation;
     use tokio::sync::mpsc;
 
@@ -522,6 +526,7 @@ mod tests {
                 env_file: None,
                 isolation: Default::default(),
                 hooks: Default::default(),
+                monitor: None,
             });
             s.status = Status::Running;
             for l in logs {
@@ -794,12 +799,17 @@ mod tests {
             guard.services[0].cfg.cmd = "sleep 30".into();
             guard.services[0].cfg.cwd = Some("packages/alpha".into());
             guard.services[0].cfg.isolation.process = true;
+            guard.services[0].cfg.monitor = Some(MonitorCfg {
+                cpu: true,
+                memory: true,
+                gpu: false,
+            });
         }
         let state = McpState {
             app,
             resources: Arc::new(Mutex::new(vec![Some(Resources {
-                cpu_percent: 1.5,
-                memory_bytes: 2048,
+                cpu_percent: Some(1.5),
+                memory_bytes: Some(2048),
                 gpu_percent: None,
                 gpu_memory_bytes: None,
             })])),
@@ -829,12 +839,20 @@ mod tests {
     #[tokio::test]
     async fn inspect_tool_appends_gpu_when_present() {
         let app = make_app(vec![("alpha", vec![])]);
-        app.lock().await.services[0].pid = Some(42);
+        {
+            let mut guard = app.lock().await;
+            guard.services[0].pid = Some(42);
+            guard.services[0].cfg.monitor = Some(MonitorCfg {
+                cpu: true,
+                memory: true,
+                gpu: true,
+            });
+        }
         let state = McpState {
             app,
             resources: Arc::new(Mutex::new(vec![Some(Resources {
-                cpu_percent: 1.5,
-                memory_bytes: 2048,
+                cpu_percent: Some(1.5),
+                memory_bytes: Some(2048),
                 gpu_percent: Some(12.0),
                 gpu_memory_bytes: Some(256 * 1024 * 1024),
             })])),
@@ -858,8 +876,8 @@ mod tests {
         let state = McpState {
             app,
             resources: Arc::new(Mutex::new(vec![Some(Resources {
-                cpu_percent: 9.0,
-                memory_bytes: 100,
+                cpu_percent: Some(9.0),
+                memory_bytes: Some(100),
                 gpu_percent: Some(3.0),
                 gpu_memory_bytes: Some(64),
             })])),
@@ -871,6 +889,64 @@ mod tests {
         assert_eq!(
             result["content"][0]["text"],
             "alpha: Stopped pid=none resources=n/a"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_tool_hides_resources_when_monitoring_is_off() {
+        let app = make_app(vec![("alpha", vec![])]);
+        app.lock().await.services[0].pid = Some(42);
+        let state = McpState {
+            app,
+            resources: Arc::new(Mutex::new(vec![Some(Resources {
+                cpu_percent: Some(1.5),
+                memory_bytes: Some(2048),
+                gpu_percent: Some(12.0),
+                gpu_memory_bytes: None,
+            })])),
+        };
+        let result = inspect_tool(json!({ "service": "alpha" }), &state)
+            .await
+            .unwrap();
+        assert!(result["structuredContent"]["service"]["resources"].is_null());
+        assert_eq!(
+            result["content"][0]["text"],
+            "alpha: Running pid=42 resources=n/a"
+        );
+    }
+
+    #[tokio::test]
+    async fn inspect_tool_returns_only_the_readings_that_are_enabled() {
+        let app = make_app(vec![("alpha", vec![])]);
+        {
+            let mut guard = app.lock().await;
+            guard.services[0].pid = Some(42);
+            guard.services[0].cfg.monitor = Some(MonitorCfg {
+                cpu: false,
+                memory: true,
+                gpu: false,
+            });
+        }
+        let state = McpState {
+            app,
+            resources: Arc::new(Mutex::new(vec![Some(Resources {
+                cpu_percent: Some(1.5),
+                memory_bytes: Some(2048),
+                gpu_percent: Some(12.0),
+                gpu_memory_bytes: Some(512),
+            })])),
+        };
+        let result = inspect_tool(json!({ "service": "alpha" }), &state)
+            .await
+            .unwrap();
+        let resources = &result["structuredContent"]["service"]["resources"];
+        assert!(resources["cpu_percent"].is_null());
+        assert_eq!(resources["memory_bytes"], 2048);
+        assert!(resources["gpu_percent"].is_null());
+        assert!(resources["gpu_memory_bytes"].is_null());
+        assert_eq!(
+            result["content"][0]["text"],
+            "alpha: Running pid=42 resources=2.0 KB"
         );
     }
 

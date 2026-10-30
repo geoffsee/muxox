@@ -100,19 +100,26 @@
     }
 
     function formatResources(resources) {
-        let text = formatCpu(resources.cpu_percent) + " \u00b7 " + formatBytes(resources.memory_bytes);
+        const parts = [];
+        if (resources.cpu_percent !== null && resources.cpu_percent !== undefined) {
+            parts.push(formatCpu(resources.cpu_percent));
+        }
+        if (resources.memory_bytes !== null && resources.memory_bytes !== undefined) {
+            parts.push(formatBytes(resources.memory_bytes));
+        }
         const gpu = resources.gpu_percent;
         const gpuMem = resources.gpu_memory_bytes;
         const hasGpu = gpu !== null && gpu !== undefined;
         const hasGpuMem = gpuMem !== null && gpuMem !== undefined;
         if (hasGpu && hasGpuMem) {
-            text += " \u00b7 GPU " + formatCpu(gpu) + " \u00b7 " + formatBytes(gpuMem);
+            parts.push("GPU " + formatCpu(gpu));
+            parts.push(formatBytes(gpuMem));
         } else if (hasGpu) {
-            text += " \u00b7 GPU " + formatCpu(gpu);
+            parts.push("GPU " + formatCpu(gpu));
         } else if (hasGpuMem) {
-            text += " \u00b7 GPU " + formatBytes(gpuMem);
+            parts.push("GPU " + formatBytes(gpuMem));
         }
-        return text;
+        return parts.join(" \u00b7 ");
     }
 
     function statusShowsResources(status) {
@@ -121,7 +128,7 @@
 
     function applyResources(el, resources, status) {
         const show = resources && statusShowsResources(status);
-        const hint = "CPU, memory, and GPU for this service and its child processes";
+        const hint = "Usage for this service and its child processes";
         el.hidden = !show;
         el.textContent = show ? formatResources(resources) : "";
         el.title = show ? formatResources(resources) + ". " + hint : hint;
@@ -317,7 +324,7 @@
         const resourcesEl = document.createElement("span");
         resourcesEl.id = `resources-${idx}`;
         resourcesEl.className = "service-resources";
-        resourcesEl.title = "CPU, memory, and GPU for this service and its child processes";
+        resourcesEl.title = "Usage for this service and its child processes";
         applyResources(resourcesEl, svc.resources, svc.status);
 
         const controls = document.createElement("div");

@@ -9,7 +9,7 @@ members = [
 default-members = ["crates/muxox"]
 
 [workspace.package]
-version = "1.9.0"
+version = "1.9.1"
 edition = "2024"
 authors = ["Geoff Seemueller <geoff@seemueller.io>"]
 license = "MIT"

@@ -9,7 +9,7 @@ use muxox_core::app::{App, AppMsg, ServiceState, Status, apply_msg, shutdown, st
 use muxox_core::config::Config;
 use muxox_core::isolation::default_isolation;
 use muxox_core::signal::signal_watcher;
-use muxox_web::run_mcp_server;
+use muxox_web::{empty_resource_slots, run_mcp_server, spawn_resource_sampler};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task;
 
@@ -42,9 +42,12 @@ pub async fn run_raw_mode(cfg: Config) -> Result<()> {
 
     // Optional embedded MCP server for agent inspection and start/stop.
     if mcp.enabled {
+        let service_count = app.lock().await.services.len();
+        let resources = empty_resource_slots(service_count);
+        spawn_resource_sampler(Arc::clone(&app), Arc::clone(&resources), None);
         let app_for_mcp = Arc::clone(&app);
         task::spawn(async move {
-            if let Err(e) = run_mcp_server(mcp, app_for_mcp).await {
+            if let Err(e) = run_mcp_server(mcp, app_for_mcp, resources).await {
                 eprintln!("MCP server error: {e}");
             }
         });

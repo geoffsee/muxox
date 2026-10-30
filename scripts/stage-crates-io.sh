@@ -209,6 +209,7 @@ ratatui = "0.30"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sysinfo = { version = "0.40.1", default-features = false, features = ["system", "gpu"] }
 tokio = { version = "1", features = ["full"] }
 toml = "0.8"
 

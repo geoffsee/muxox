@@ -15,6 +15,7 @@ mod tests {
                 status: "Running".into(),
                 logs: vec!["line 1".into()],
                 interactive: false,
+                resources: None,
             }],
         };
         let ws_msg = msg.to_message();
@@ -155,12 +156,19 @@ mod tests {
                     status: "Running".into(),
                     logs: vec![],
                     interactive: false,
+                    resources: Some(crate::resources::Resources {
+                        cpu_percent: 4.0,
+                        memory_bytes: 48 * 1024 * 1024,
+                        gpu_percent: Some(12.0),
+                        gpu_memory_bytes: None,
+                    }),
                 },
                 ServiceInfo {
                     name: "api".into(),
                     status: "Stopped".into(),
                     logs: vec!["err".into()],
                     interactive: true,
+                    resources: None,
                 },
             ],
         };
@@ -172,6 +180,39 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["services"].as_array().unwrap().len(), 2);
         assert_eq!(json["services"][1]["interactive"], true);
+        assert_eq!(json["services"][0]["resources"]["cpu_percent"], 4.0);
+        assert_eq!(
+            json["services"][0]["resources"]["memory_bytes"],
+            48 * 1024 * 1024
+        );
+        assert_eq!(json["services"][0]["resources"]["gpu_percent"], 12.0);
+        assert!(json["services"][0]["resources"]["gpu_memory_bytes"].is_null());
+        assert!(json["services"][1].get("resources").is_none());
+    }
+
+    #[test]
+    fn resources_message_round_trips_sample_and_clear() {
+        let sample = WsOutbound::Resources {
+            idx: 1,
+            resources: Some(crate::resources::Resources {
+                cpu_percent: 1.5,
+                memory_bytes: 2048,
+                gpu_percent: None,
+                gpu_memory_bytes: None,
+            }),
+        };
+        let json = serde_json::to_value(&sample).unwrap();
+        assert_eq!(json["type"], "Resources");
+        assert_eq!(json["idx"], 1);
+        assert_eq!(json["resources"]["memory_bytes"], 2048);
+
+        let clear = WsOutbound::Resources {
+            idx: 1,
+            resources: None,
+        };
+        let json = serde_json::to_value(&clear).unwrap();
+        assert_eq!(json["type"], "Resources");
+        assert!(json["resources"].is_null());
     }
 }
 

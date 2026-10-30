@@ -22,6 +22,11 @@ pub enum WsOutbound {
         idx: usize,
         status: String,
     },
+    /// Latest CPU, memory, and GPU for one service. `None` clears the header.
+    Resources {
+        idx: usize,
+        resources: Option<crate::resources::Resources>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -30,6 +35,9 @@ pub struct ServiceInfo {
     pub status: String,
     pub logs: Vec<String>,
     pub interactive: bool,
+    /// Last sample. Absent until the sampler has primed and the service is up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resources: Option<crate::resources::Resources>,
 }
 
 /// Messages received from web clients.

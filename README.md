@@ -217,11 +217,12 @@ When muxox starts (in web mode or with `--raw`), it prints the bound URL:
 MCP server listening at http://127.0.0.1:54321/mcp
 ```
 
-Point your MCP client at that URL.  The server advertises four tools:
+Point your MCP client at that URL.  The server advertises five tools:
 
 | Tool | Description |
 |------|-------------|
 | `list_services` | Returns every service muxox is managing, with `status`, `pid`, and current `log_lines`. |
+| `inspect`       | Returns one service's status, pid, command, working directory, and latest CPU, memory, and GPU.  Argument: `service` (required).  `resources` is null when the service is not running or the first sample is not ready yet.  `gpu_percent` and `gpu_memory_bytes` are null when that reading is unavailable. |
 | `get_logs`      | Returns recent log lines for one service.  Arguments: `service` (required), `tail` (default 200, max 5000), `grep` (optional substring filter). |
 | `start_service` | Starts one service by name.  Argument: `service` (required).  No-op when that service is already starting or running. |
 | `stop_service`  | Stops one service by name.  Argument: `service` (required).  No-op unless that service is starting or running. |

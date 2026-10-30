@@ -3,6 +3,7 @@
 // This file is part of muxox, released under the MIT License.
 
 use crate::mcp::run_mcp_server;
+use crate::resources::{Resources, Sampler};
 use crate::ui;
 use crate::ws_proto::{ServiceInfo, WsInbound, WsOutbound};
 use anyhow::Result;
@@ -18,14 +19,15 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use muxox_core::app::{
-    App, AppMsg, ServiceState, apply_msg, drain_pending, shutdown, start_all, start_service,
-    stop_service,
+    App, AppMsg, ServiceState, Status, apply_msg, drain_pending, shutdown, start_all,
+    start_service, stop_service,
 };
 use muxox_core::config::{Config, display_name};
 use muxox_core::isolation::default_isolation;
 use muxox_core::signal::signal_watcher;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::task;
 
@@ -38,6 +40,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
         config_dir,
         ..
     } = cfg;
+    let service_count = service.len();
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     muxox_core::updates::spawn_update_check(tx.clone());
     // Bytes rather than Vec<u8>: broadcast clones the value once per
@@ -70,11 +73,16 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     // Signal watcher
     task::spawn(signal_watcher(tx.clone()));
 
+    // One slot per service. The sampler fills it; Init, the stop path, and
+    // MCP `inspect` read it.
+    let resources: Arc<Mutex<Vec<Option<Resources>>>> = empty_resource_slots(service_count);
+
     // Optional embedded MCP server for agent inspection and start/stop.
     if mcp.enabled {
         let app_for_mcp = Arc::clone(&app);
+        let resources_for_mcp = Arc::clone(&resources);
         task::spawn(async move {
-            if let Err(e) = run_mcp_server(mcp, app_for_mcp).await {
+            if let Err(e) = run_mcp_server(mcp, app_for_mcp, resources_for_mcp).await {
                 eprintln!("MCP server error: {e}");
             }
         });
@@ -83,10 +91,15 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     // Broadcast messages to all connected WebSockets
     let b_tx_clone = b_tx.clone();
     let app_for_msgs = Arc::clone(&app);
+    let resources_for_msgs = Arc::clone(&resources);
     task::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let mut app_lock = app_for_msgs.lock().await;
             apply_msg(&mut app_lock, msg.clone());
+
+            if let AppMsg::Stopped(idx, _) = &msg {
+                clear_resources(&resources_for_msgs, &b_tx_clone, *idx).await;
+            }
 
             let ws_msg = match &msg {
                 AppMsg::UpdateAvailable(update) => Some(WsOutbound::UpdateAvailable {
@@ -108,9 +121,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
             };
 
             if let Some(msg) = ws_msg {
-                let _ = b_tx_clone.send(Bytes::from(
-                    serde_json::to_vec(&msg).expect("WsOutbound serialization cannot fail"),
-                ));
+                send_outbound(&b_tx_clone, &msg);
             }
 
             if matches!(msg, AppMsg::AbortedAll) {
@@ -120,9 +131,12 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
         }
     });
 
+    spawn_resource_sampler(Arc::clone(&app), Arc::clone(&resources), Some(b_tx.clone()));
+
     let shared_state = Arc::new(WebState {
         app: Arc::clone(&app),
         broadcast_tx: b_tx,
+        resources,
         ui_name,
     });
 
@@ -149,6 +163,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
 struct WebState {
     app: Arc<Mutex<App>>,
     broadcast_tx: broadcast::Sender<Bytes>,
+    resources: Arc<Mutex<Vec<Option<Resources>>>>,
     ui_name: String,
 }
 
@@ -167,14 +182,17 @@ async fn handle_socket(socket: WebSocket, state: Arc<WebState>) {
     // Send initial state
     {
         let app = state.app.lock().await;
+        let slots = state.resources.lock().await;
         let services: Vec<ServiceInfo> = app
             .services
             .iter()
-            .map(|s| ServiceInfo {
+            .enumerate()
+            .map(|(idx, s)| ServiceInfo {
                 name: s.cfg.name.clone(),
                 status: s.status.as_str().to_owned(),
                 logs: s.log.iter().cloned().collect(),
                 interactive: s.cfg.interactive,
+                resources: slots.get(idx).copied().flatten(),
             })
             .collect();
         let init_msg = WsOutbound::Init {
@@ -239,4 +257,108 @@ async fn handle_socket(socket: WebSocket, state: Arc<WebState>) {
         _ = (&mut send_task) => recv_task.abort(),
         _ = (&mut recv_task) => send_task.abort(),
     };
+}
+
+fn send_outbound(tx: &broadcast::Sender<Bytes>, msg: &WsOutbound) {
+    let _ = tx.send(Bytes::from(
+        serde_json::to_vec(msg).expect("WsOutbound serialization cannot fail"),
+    ));
+}
+
+/// Clear one service's sample and tell clients. Caller must already hold the
+/// app lock, so this only takes the resource lock (app, then resources).
+async fn clear_resources(
+    resources: &Mutex<Vec<Option<Resources>>>,
+    tx: &broadcast::Sender<Bytes>,
+    idx: usize,
+) {
+    let mut slots = resources.lock().await;
+    if let Some(slot) = slots.get_mut(idx)
+        && slot.take().is_some()
+    {
+        send_outbound(
+            tx,
+            &WsOutbound::Resources {
+                idx,
+                resources: None,
+            },
+        );
+    }
+}
+
+fn service_root(service: &ServiceState) -> Option<u32> {
+    if matches!(service.status, Status::Running | Status::Stopping) {
+        service.pid
+    } else {
+        None
+    }
+}
+
+pub fn empty_resource_slots(count: usize) -> Arc<Mutex<Vec<Option<Resources>>>> {
+    Arc::new(Mutex::new(vec![None; count]))
+}
+
+/// Sample every service about once a second.
+///
+/// `tx` broadcasts header updates to web clients. Pass `None` when only the
+/// shared slots are needed, as in `--raw` mode.
+pub fn spawn_resource_sampler(
+    app: Arc<Mutex<App>>,
+    resources: Arc<Mutex<Vec<Option<Resources>>>>,
+    tx: Option<broadcast::Sender<Bytes>>,
+) {
+    task::spawn(async move {
+        let mut sampler = match Sampler::new() {
+            Ok(sampler) => sampler,
+            Err(e) => {
+                eprintln!("resource sampler unavailable: {e}");
+                return;
+            }
+        };
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            ticker.tick().await;
+            let roots = {
+                let app = app.lock().await;
+                app.services.iter().map(service_root).collect::<Vec<_>>()
+            };
+            let (sampler_back, samples) = match task::spawn_blocking(move || {
+                let mut sampler = sampler;
+                let samples = sampler.sample(&roots);
+                (sampler, samples)
+            })
+            .await
+            {
+                Ok(pair) => pair,
+                Err(_) => return,
+            };
+            sampler = sampler_back;
+
+            // Re-check status under the app lock so a stop that landed during
+            // the sample cannot be overwritten by a stale tree.
+            let app = app.lock().await;
+            let mut slots = resources.lock().await;
+            for (idx, sample) in samples.into_iter().enumerate() {
+                let live = app.services.get(idx).and_then(service_root).is_some();
+                let next = if live { sample } else { None };
+                let Some(slot) = slots.get_mut(idx) else {
+                    continue;
+                };
+                if *slot == next {
+                    continue;
+                }
+                *slot = next;
+                if let Some(tx) = &tx {
+                    send_outbound(
+                        tx,
+                        &WsOutbound::Resources {
+                            idx,
+                            resources: next,
+                        },
+                    );
+                }
+            }
+        }
+    });
 }

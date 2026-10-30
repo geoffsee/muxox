@@ -70,7 +70,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     // Signal watcher
     task::spawn(signal_watcher(tx.clone()));
 
-    // Optional embedded MCP server for agent log access.
+    // Optional embedded MCP server for agent inspection and start/stop.
     if mcp.enabled {
         let app_for_mcp = Arc::clone(&app);
         task::spawn(async move {

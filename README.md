@@ -196,11 +196,11 @@ Notes:
 
 ## Embedded MCP server
 
-Muxox can expose its service registry and captured logs to MCP-compatible
-agents via an embedded JSON-RPC 2.0 server (Model Context Protocol,
-[Streamable HTTP transport](https://modelcontextprotocol.io)).  This makes it
-trivial for AI coding agents to inspect what your services are doing without
-scraping the web UI.
+Muxox can expose its service registry, captured logs, and start/stop controls
+to MCP-compatible agents via an embedded JSON-RPC 2.0 server (Model Context
+Protocol, [Streamable HTTP transport](https://modelcontextprotocol.io)).  This
+makes it trivial for AI coding agents to inspect and control your services
+without scraping the web UI.
 
 Enable it from `muxox.toml`:
 
@@ -217,12 +217,14 @@ When muxox starts (in web mode or with `--raw`), it prints the bound URL:
 MCP server listening at http://127.0.0.1:54321/mcp
 ```
 
-Point your MCP client at that URL.  The server advertises two tools:
+Point your MCP client at that URL.  The server advertises four tools:
 
 | Tool | Description |
 |------|-------------|
 | `list_services` | Returns every service muxox is managing, with `status`, `pid`, and current `log_lines`. |
 | `get_logs`      | Returns recent log lines for one service.  Arguments: `service` (required), `tail` (default 200, max 5000), `grep` (optional substring filter). |
+| `start_service` | Starts one service by name.  Argument: `service` (required).  No-op when that service is already starting or running. |
+| `stop_service`  | Stops one service by name.  Argument: `service` (required).  No-op unless that service is starting or running. |
 
 The MCP server is **not** started in `--tui` mode (the TUI uses single-thread
 state that can't be shared with the HTTP server).  Use the default web mode or

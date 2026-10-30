@@ -17,6 +17,7 @@ mod tests {
             env_file: None,
             isolation: Default::default(),
             hooks: Default::default(),
+            monitor: None,
         }
     }
 
@@ -93,6 +94,7 @@ mod tests {
                 env_file: None,
                 isolation: Default::default(),
                 hooks: Default::default(),
+                monitor: None,
             })],
             selected: 0,
             log_offset_from_end: 0,

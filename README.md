@@ -141,6 +141,7 @@ Each service supports:
 - env_file: Path to a `.env` file whose KEY=VALUE pairs are injected into the service's environment (optional)
 - isolation: Per-service sandboxing settings (optional, see below)
 - hooks: Per-service lifecycle hooks (optional, see below)
+- monitor: Opt-in CPU, memory, and GPU sampling (optional, see below)
 
 Tips:
 - Use cwd to run commands from anywhere.
@@ -169,6 +170,17 @@ name = "api"
 cmd = "bun run dev"
 cwd = "./packages/api"
 hooks = { before_start = "./scripts/api-pre.sh", after_stop = "./scripts/api-cleanup.sh" }
+```
+
+### Resource monitoring
+
+Off until a service opts in. Inside the table, `cpu` and `memory` default to `true` and `gpu` defaults to `false`. The header and `inspect` omit a reading that is off. GPU stays out of the scan unless some running service sets `gpu = true`.
+
+```toml
+[[service]]
+name = "api"
+cmd = "bun run dev"
+monitor = { cpu = true, memory = true, gpu = false }
 ```
 
 ### Isolation
@@ -222,7 +234,7 @@ Point your MCP client at that URL.  The server advertises five tools:
 | Tool | Description |
 |------|-------------|
 | `list_services` | Returns every service muxox is managing, with `status`, `pid`, and current `log_lines`. |
-| `inspect`       | Returns one service's status, pid, command, working directory, and latest CPU, memory, and GPU.  Argument: `service` (required).  `resources` is null when the service is not running or the first sample is not ready yet.  `gpu_percent` and `gpu_memory_bytes` are null when that reading is unavailable. |
+| `inspect`       | Returns one service's status, pid, command, working directory, and latest resource sample.  Argument: `service` (required).  `resources` is null when monitoring is off, the service is not running, or the first sample is not ready yet.  Each of `cpu_percent`, `memory_bytes`, `gpu_percent`, and `gpu_memory_bytes` is null when that reading is disabled or unavailable. |
 | `get_logs`      | Returns recent log lines for one service.  Arguments: `service` (required), `tail` (default 200, max 5000), `grep` (optional substring filter). |
 | `start_service` | Starts one service by name.  Argument: `service` (required).  No-op when that service is already starting or running. |
 | `stop_service`  | Stops one service by name.  Argument: `service` (required).  No-op unless that service is starting or running. |

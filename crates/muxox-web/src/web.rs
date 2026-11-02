@@ -11,9 +11,10 @@ use axum::{
     Router,
     body::Bytes,
     extract::{
-        State,
+        Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
+    http::{HeaderValue, StatusCode, header},
     response::{Html, IntoResponse},
     routing::get,
 };
@@ -143,6 +144,7 @@ pub async fn run_web_mode(cfg: Config, port: u16) -> Result<()> {
     let router = Router::new()
         .route("/", get(index_handler))
         .route("/ws", get(ws_handler))
+        .route("/logs/{idx}", get(export_logs))
         .with_state(shared_state);
 
     let addr: SocketAddr = format!("[::1]:{}", port).parse()?;
@@ -169,6 +171,84 @@ struct WebState {
 
 async fn index_handler(State(state): State<Arc<WebState>>) -> impl IntoResponse {
     Html(ui::render_index(&state.ui_name))
+}
+
+/// Download one service's captured log. `idx` matches the web UI service index.
+async fn export_logs(
+    Path(idx): Path<usize>,
+    State(state): State<Arc<WebState>>,
+) -> impl IntoResponse {
+    let app = state.app.lock().await;
+    let Some(svc) = app.services.get(idx) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+    let filename = log_download_name(&svc.cfg.name);
+    let body = export_log_text(svc.log.iter().map(String::as_str));
+    let disposition = format!("attachment; filename=\"{filename}\"");
+    Ok((
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(&disposition).expect("log filename is ascii"),
+            ),
+        ],
+        body,
+    ))
+}
+
+fn log_download_name(name: &str) -> String {
+    let mut safe = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+            safe.push(c);
+        } else {
+            safe.push('_');
+        }
+    }
+    let trimmed = safe.trim_matches(['.', '_']);
+    let base = if trimmed.is_empty() {
+        "service"
+    } else {
+        trimmed
+    };
+    format!("{base}.log")
+}
+
+/// Plain-text log body. ANSI color sequences are removed so the file matches
+/// the readable text in the service shell.
+fn export_log_text<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
+    let mut body = String::new();
+    for line in lines {
+        body.push_str(&strip_ansi(line));
+        body.push('\n');
+    }
+    body
+}
+
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+            i += 2;
+            while i < bytes.len() && !bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            if i < bytes.len() {
+                i += 1;
+            }
+            continue;
+        }
+        let ch = input[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<WebState>>) -> impl IntoResponse {
@@ -394,4 +474,100 @@ pub fn spawn_resource_sampler(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use muxox_core::app::{App, AppMsg, ServiceState, Status};
+    use muxox_core::config::ServiceCfg;
+    use muxox_core::isolation::default_isolation;
+    use tokio::sync::mpsc;
+
+    fn service_with_logs(name: &str, lines: &[&str]) -> ServiceState {
+        let mut svc = ServiceState::new(ServiceCfg {
+            name: name.to_string(),
+            cmd: "true".into(),
+            cwd: None,
+            log_capacity: 100,
+            interactive: false,
+            pty: false,
+            env_file: None,
+            isolation: Default::default(),
+            hooks: Default::default(),
+            monitor: None,
+        });
+        svc.status = Status::Running;
+        for line in lines {
+            svc.push_log(*line);
+        }
+        svc
+    }
+
+    fn state_with(services: Vec<ServiceState>) -> Arc<WebState> {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppMsg>();
+        let (broadcast_tx, _) = broadcast::channel(8);
+        let count = services.len();
+        Arc::new(WebState {
+            app: Arc::new(Mutex::new(App {
+                services,
+                selected: 0,
+                log_offset_from_end: 0,
+                tx,
+                input_mode: false,
+                input_buffer: String::new(),
+                isolation: default_isolation(),
+                update_notice: None,
+                hooks: Default::default(),
+                config_dir: None,
+                settle_tx: None,
+            })),
+            broadcast_tx,
+            resources: empty_resource_slots(count),
+            ui_name: "test".into(),
+        })
+    }
+
+    #[test]
+    fn log_download_name_keeps_safe_characters() {
+        assert_eq!(log_download_name("sandbox-broker"), "sandbox-broker.log");
+        assert_eq!(log_download_name("a/b c"), "a_b_c.log");
+        assert_eq!(log_download_name(".."), "service.log");
+        assert_eq!(log_download_name(""), "service.log");
+    }
+
+    #[test]
+    fn export_log_text_strips_ansi_and_keeps_lines() {
+        let body = export_log_text(["plain", "\u{1b}[33mwarning\u{1b}[0m"]);
+        assert_eq!(body, "plain\nwarning\n");
+    }
+
+    #[tokio::test]
+    async fn export_logs_downloads_named_service_log() {
+        let state = state_with(vec![
+            service_with_logs("alpha", &["\u{1b}[32malpha-log-line\u{1b}[0m", "second"]),
+            service_with_logs("beta", &["beta-log-line"]),
+        ]);
+
+        let response = export_logs(Path(0), State(Arc::clone(&state)))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+            "attachment; filename=\"alpha.log\""
+        );
+        let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+        assert_eq!(body.as_ref(), b"alpha-log-line\nsecond\n");
+
+        let beta = export_logs(Path(1), State(Arc::clone(&state)))
+            .await
+            .into_response();
+        let body = to_bytes(beta.into_body(), 64 * 1024).await.unwrap();
+        assert_eq!(body.as_ref(), b"beta-log-line\n");
+
+        let missing = export_logs(Path(9), State(state)).await.into_response();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    }
 }

@@ -30,6 +30,7 @@
         send: '<path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4z"/>',
         terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
         follow: '<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>',
+        more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
     };
 
     function icon(name) {
@@ -351,7 +352,11 @@
         followBtn.hidden = true;
 
         controls.append(followBtn, startBtn, stopBtn);
-        header.append(name, resourcesEl, controls);
+
+        const actions = document.createElement("div");
+        actions.className = "service-actions";
+        actions.append(controls, createServiceMenu(idx, box.dataset.name));
+        header.append(name, resourcesEl, actions);
 
         const logArea = document.createElement("div");
         logArea.className = "log-area";
@@ -388,6 +393,87 @@
 
         return box;
     }
+
+    function logFileName(name) {
+        let safe = "";
+        for (const c of String(name || "")) {
+            safe += /[A-Za-z0-9._-]/.test(c) ? c : "_";
+        }
+        const trimmed = safe.replace(/^[._]+|[._]+$/g, "");
+        return (trimmed || "service") + ".log";
+    }
+
+    function closeServiceMenus() {
+        document.querySelectorAll(".service-menu-pop").forEach((menu) => {
+            menu.hidden = true;
+        });
+        document.querySelectorAll(".menu-btn[aria-expanded='true']").forEach((btn) => {
+            btn.setAttribute("aria-expanded", "false");
+        });
+    }
+
+    function createServiceMenu(idx, name) {
+        const wrap = document.createElement("div");
+        wrap.className = "service-menu";
+
+        const menuBtn = document.createElement("button");
+        menuBtn.type = "button";
+        menuBtn.className = "menu-btn";
+        menuBtn.innerHTML = icon("more");
+        menuBtn.title = "More actions";
+        menuBtn.setAttribute("aria-label", "More actions for " + (name || "service"));
+        menuBtn.setAttribute("aria-haspopup", "menu");
+        menuBtn.setAttribute("aria-expanded", "false");
+        menuBtn.setAttribute("aria-controls", `menu-${idx}`);
+
+        const menu = document.createElement("div");
+        menu.id = `menu-${idx}`;
+        menu.className = "service-menu-pop";
+        menu.setAttribute("role", "menu");
+        menu.hidden = true;
+
+        const exportBtn = document.createElement("button");
+        exportBtn.type = "button";
+        exportBtn.setAttribute("role", "menuitem");
+        exportBtn.textContent = "Export";
+        exportBtn.title = "Download logs for this service";
+        exportBtn.onclick = () => {
+            closeServiceMenus();
+            exportLogs(idx, name);
+        };
+
+        menuBtn.onclick = () => {
+            const willOpen = menu.hidden;
+            closeServiceMenus();
+            if (willOpen) {
+                menu.hidden = false;
+                menuBtn.setAttribute("aria-expanded", "true");
+                exportBtn.focus();
+            }
+        };
+
+        menu.append(exportBtn);
+        wrap.append(menuBtn, menu);
+        return wrap;
+    }
+
+    function exportLogs(idx, name) {
+        const a = document.createElement("a");
+        a.href = `/logs/${idx}`;
+        a.download = logFileName(name);
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
+
+    document.addEventListener("click", (event) => {
+        if (event.target.closest(".service-menu")) return;
+        closeServiceMenus();
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeServiceMenus();
+    });
 
     // Shells tile the viewport. Vertical splitters resize columns; horizontal
     // splitters trade height between the two shells stacked in that column.

@@ -120,6 +120,8 @@ header {
 }
 
 .service-header {
+    position: relative;
+    z-index: 3;
     padding: 10px 14px;
     background: var(--surface-raised);
     border-bottom: 1px solid var(--border);
@@ -194,10 +196,79 @@ header {
     color: var(--orange);
 }
 
+.service-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
 .controls {
     display: flex;
     gap: 4px;
     flex-shrink: 0;
+}
+
+.service-menu {
+    position: relative;
+}
+
+.menu-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    padding: 4px 7px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+    transition: all 0.15s;
+}
+
+.menu-btn:hover,
+.menu-btn[aria-expanded="true"] {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.service-menu-pop {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 5;
+    min-width: 148px;
+    padding: 4px;
+    background: #2a2a2a;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.service-menu-pop[hidden] {
+    display: none;
+}
+
+.service-menu-pop button {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: var(--text);
+    border: none;
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.service-menu-pop button:hover,
+.service-menu-pop button:focus-visible {
+    background: rgba(255, 255, 255, 0.06);
+    outline: none;
 }
 
 .service-icon {

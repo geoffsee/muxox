@@ -23,4 +23,4 @@ ratatui = "0.30"
 tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", features = ["signal", "process", "sched"] }
+nix = { version = "0.32", features = ["signal", "process", "sched"] }
